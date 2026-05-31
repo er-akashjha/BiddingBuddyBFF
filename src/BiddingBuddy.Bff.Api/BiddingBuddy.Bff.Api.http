@@ -1,0 +1,6 @@
+@BiddingBuddy.Bff.Api_HostAddress = http://localhost:5124
+
+GET {{BiddingBuddy.Bff.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

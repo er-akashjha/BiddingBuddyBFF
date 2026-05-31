@@ -1,0 +1,42 @@
+## .NET gitignore
+
+# Build output
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userprefs
+*.sln.docstates
+
+# VS / Rider
+.vs/
+.idea/
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+!**/packages/build/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Publish output
+publish/
+**/Properties/PublishProfiles/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit these
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json
+
+# EF Core migrations (generated on deploy)
+# Uncomment if you want to exclude migrations:
+# **/Migrations/
