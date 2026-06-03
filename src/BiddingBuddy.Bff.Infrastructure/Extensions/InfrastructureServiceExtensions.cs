@@ -1,4 +1,7 @@
+using Amazon.Runtime;
+using Amazon.S3;
 using BiddingBuddy.Bff.Core.Interfaces;
+using BiddingBuddy.Bff.Core.Options;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using BiddingBuddy.Bff.Infrastructure.Repositories;
 using BiddingBuddy.Bff.Infrastructure.Services;
@@ -18,6 +21,30 @@ public static class InfrastructureServiceExtensions
                 npg => npg.MigrationsAssembly(typeof(BffDbContext).Assembly.FullName)));
 
         services.AddHttpClient();
+
+        // ── Cloudflare R2 (S3-compatible) ─────────────────────────────────────
+        services.Configure<R2Options>(config.GetSection(R2Options.Section));
+
+        services.AddKeyedSingleton<IAmazonS3>("R2", (sp, _) =>
+        {
+            var r2 = config.GetSection(R2Options.Section).Get<R2Options>()
+                ?? throw new InvalidOperationException("R2 configuration section is missing.");
+
+            var s3Config = new AmazonS3Config
+            {
+                ServiceURL     = r2.Endpoint,
+                ForcePathStyle = true,
+                AuthenticationRegion = "auto",
+            };
+
+            var credentials = new BasicAWSCredentials(r2.AccessKeyId, r2.SecretAccessKey);
+            return new AmazonS3Client(credentials, s3Config);
+        });
+
+        services.AddScoped<IR2Storage, R2Storage>();
+
+        // Typed HTTP client — BiddingBuddyServices (MongoDB internal API, Basic auth)
+        services.AddHttpClient<IBiddingBuddyServicesClient, BiddingBuddyServicesClient>();
 
         // Repositories
         services.AddScoped<IUserRepository, UserRepository>();

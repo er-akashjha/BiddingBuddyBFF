@@ -15,6 +15,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         b.Property(x => x.Name).HasColumnName("name").IsRequired();
         b.Property(x => x.AvatarUrl).HasColumnName("avatar_url");
         b.Property(x => x.Phone).HasColumnName("phone");
+        b.Property(x => x.PasswordHash).HasColumnName("password_hash");
         b.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
         b.Property(x => x.LastLoginAt).HasColumnName("last_login_at");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");

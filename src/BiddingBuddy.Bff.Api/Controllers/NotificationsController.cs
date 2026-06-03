@@ -1,3 +1,4 @@
+using BiddingBuddy.Bff.Core.DTOs.Common;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -8,10 +9,12 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [ApiController]
 [Route("api/notifications")]
 [Authorize]
+[Produces("application/json")]
 public class NotificationsController(INotificationService notificationService) : BffControllerBase
 {
-    /// <summary>GET /api/notifications?unreadOnly=false&amp;page=1&amp;pageSize=20</summary>
+    /// <summary>Paginated notification list for the current user in the org.</summary>
     [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<NotificationDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         [FromQuery] bool unreadOnly = false,
         [FromQuery] int page = 1,
@@ -22,32 +25,37 @@ public class NotificationsController(INotificationService notificationService) :
         return Ok(result);
     }
 
-    /// <summary>PATCH /api/notifications/{id}/read</summary>
+    /// <summary>Mark a single notification as read.</summary>
     [HttpPatch("{id:guid}/read")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> MarkRead(Guid id, CancellationToken ct)
     {
         await notificationService.MarkReadAsync(id, CurrentUserId, ct);
         return NoContent();
     }
 
-    /// <summary>POST /api/notifications/read-all</summary>
+    /// <summary>Mark all unread notifications as read for the current user in this org.</summary>
     [HttpPost("read-all")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> MarkAllRead(CancellationToken ct)
     {
         await notificationService.MarkAllReadAsync(CurrentOrgId, CurrentUserId, ct);
         return NoContent();
     }
 
-    /// <summary>GET /api/notifications/preferences</summary>
+    /// <summary>Get notification channel preferences for the current user.</summary>
     [HttpGet("preferences")]
+    [ProducesResponseType(typeof(IReadOnlyList<NotificationPreferenceDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetPreferences(CancellationToken ct)
     {
         var prefs = await notificationService.GetPreferencesAsync(CurrentUserId, ct);
         return Ok(prefs);
     }
 
-    /// <summary>PATCH /api/notifications/preferences</summary>
+    /// <summary>Update which channels and event types trigger notifications for the current user.</summary>
     [HttpPatch("preferences")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> UpdatePreferences([FromBody] UpdatePreferencesDto dto, CancellationToken ct)
     {
         await notificationService.UpdatePreferencesAsync(CurrentUserId, dto, ct);

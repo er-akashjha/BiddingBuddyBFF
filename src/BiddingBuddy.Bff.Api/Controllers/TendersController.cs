@@ -8,42 +8,59 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [ApiController]
 [Route("api/tenders")]
 [Authorize]
-public class TendersController(ITenderService tenderService) : BffControllerBase
+[Produces("application/json")]
+public class TendersController(
+    ITenderService tenderService,
+    IBiddingBuddyServicesClient servicesClient) : BffControllerBase
 {
-    /// <summary>GET /api/tenders?search=&amp;category=&amp;state=&amp;status=&amp;page=1&amp;pageSize=20</summary>
+    /// <summary>Paginated tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
     [HttpGet]
-    public async Task<IActionResult> List([FromQuery] TenderFiltersDto filters, CancellationToken ct)
+    [ProducesResponseType(typeof(List<TenderListItemDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> List([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
     {
-        var result = await tenderService.ListAsync(CurrentOrgId, filters, ct);
+        var result = await servicesClient.SearchTendersAsync(query, ct);
         return Ok(result);
     }
 
-    /// <summary>GET /api/tenders/{id}</summary>
+    /// <summary>Full tender detail by ID from BiddingBuddyServices.</summary>
     [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(TenderDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
-        var tender = await tenderService.GetAsync(id, CurrentOrgId, ct);
+        var tender = await servicesClient.GetTenderAsync(id.ToString(), ct);
         return Ok(tender);
     }
 
-    /// <summary>POST /api/tenders/{id}/save</summary>
+    /// <summary>Save a tender to the org with optional notes, tags and custom score.</summary>
     [HttpPost("{id:guid}/save")]
+    [ProducesResponseType(typeof(OrgTenderSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Save(Guid id, [FromBody] SaveTenderDto dto, CancellationToken ct)
     {
         var settings = await tenderService.SaveAsync(id, CurrentOrgId, CurrentUserId, dto, ct);
         return Ok(settings);
     }
 
-    /// <summary>DELETE /api/tenders/{id}/save</summary>
+    /// <summary>Remove a tender from the org's saved list.</summary>
     [HttpDelete("{id:guid}/save")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Unsave(Guid id, CancellationToken ct)
     {
         await tenderService.UnsaveAsync(id, CurrentOrgId, ct);
         return NoContent();
     }
 
-    /// <summary>PATCH /api/tenders/{id}/settings</summary>
+    /// <summary>Update org-specific notes, tags and custom score for a saved tender.</summary>
     [HttpPatch("{id:guid}/settings")]
+    [ProducesResponseType(typeof(OrgTenderSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> UpdateSettings(Guid id, [FromBody] SaveTenderDto dto, CancellationToken ct)
     {
         var settings = await tenderService.UpdateSettingsAsync(id, CurrentOrgId, dto, ct);

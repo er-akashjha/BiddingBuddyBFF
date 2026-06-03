@@ -25,6 +25,7 @@ CREATE TABLE users (
   name           TEXT NOT NULL,
   avatar_url     TEXT,
   phone          TEXT,
+  password_hash  TEXT,
   is_active      BOOLEAN NOT NULL DEFAULT true,
   last_login_at  TIMESTAMPTZ,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),

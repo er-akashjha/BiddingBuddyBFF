@@ -8,6 +8,7 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
+[Produces("application/json")]
 public class AuthController(
     IAuthService authService,
     ITokenService tokenService,
@@ -16,8 +17,49 @@ public class AuthController(
 {
     private static readonly HashSet<string> SupportedProviders = ["google", "github"];
 
-    /// <summary>GET /api/auth/oauth/{provider}?returnUrl=/dashboard</summary>
+    /// <summary>Register a new user with email and password.</summary>
+    [HttpPost("register")]
+    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Register([FromBody] RegisterDto dto, CancellationToken ct)
+    {
+        try
+        {
+            var tokens = await authService.RegisterAsync(dto, ct);
+            return StatusCode(201, tokens);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "EMAIL_EXISTS")
+        {
+            return Conflict(new { error = "Email already registered." });
+        }
+    }
+
+    /// <summary>Login with email and password. Returns access + refresh tokens.</summary>
+    [HttpPost("login")]
+    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Login([FromBody] LoginWithPasswordDto dto, CancellationToken ct)
+    {
+        try
+        {
+            var tokens = await authService.LoginWithPasswordAsync(dto, ct);
+            return Ok(tokens);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized(new { error = "Invalid email or password." });
+        }
+    }
+
+    /// <summary>Redirect the browser to the OAuth provider consent page (Google or GitHub).</summary>
     [HttpGet("oauth/{provider}")]
+    [ProducesResponseType(StatusCodes.Status302Found)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public IActionResult InitiateOAuth(string provider, [FromQuery] string returnUrl = "/")
     {
         provider = provider.ToLower();
@@ -29,8 +71,9 @@ public class AuthController(
         return Redirect(authUrl);
     }
 
-    /// <summary>GET /api/auth/oauth/{provider}/callback</summary>
+    /// <summary>OAuth callback — exchanges code for tokens and redirects to the frontend.</summary>
     [HttpGet("oauth/{provider}/callback")]
+    [ProducesResponseType(StatusCodes.Status302Found)]
     public async Task<IActionResult> OAuthCallback(
         string provider,
         [FromQuery] string code,
@@ -65,8 +108,10 @@ public class AuthController(
         }
     }
 
-    /// <summary>POST /api/auth/refresh</summary>
+    /// <summary>Rotate refresh token — returns a new access token + refresh token pair.</summary>
     [HttpPost("refresh")]
+    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequestDto request, CancellationToken ct)
     {
         try
@@ -80,45 +125,51 @@ public class AuthController(
         }
     }
 
-    /// <summary>POST /api/auth/logout</summary>
+    /// <summary>Revoke the current refresh token (logout).</summary>
     [HttpPost("logout")]
     [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Logout([FromBody] RefreshTokenRequestDto request, CancellationToken ct)
     {
         await authService.LogoutAsync(request.RefreshToken, ct);
         return NoContent();
     }
 
-    /// <summary>GET /api/auth/me</summary>
+    /// <summary>Get the current user's profile, organizations and connected OAuth providers.</summary>
     [HttpGet("me")]
     [Authorize]
+    [ProducesResponseType(typeof(UserDto), StatusCodes.Status200OK)]
     public async Task<IActionResult> Me(CancellationToken ct)
     {
         var user = await authService.GetCurrentUserAsync(CurrentUserId, ct);
         return Ok(user);
     }
 
-    /// <summary>PATCH /api/auth/me</summary>
+    /// <summary>Update the current user's name or phone number.</summary>
     [HttpPatch("me")]
     [Authorize]
+    [ProducesResponseType(typeof(UserDto), StatusCodes.Status200OK)]
     public async Task<IActionResult> UpdateMe([FromBody] UpdateProfileDto dto, CancellationToken ct)
     {
         var user = await authService.UpdateProfileAsync(CurrentUserId, dto, ct);
         return Ok(user);
     }
 
-    /// <summary>GET /api/auth/me/providers</summary>
+    /// <summary>List OAuth providers (google, github) linked to the current user.</summary>
     [HttpGet("me/providers")]
     [Authorize]
+    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetProviders(CancellationToken ct)
     {
         var user = await authService.GetCurrentUserAsync(CurrentUserId, ct);
         return Ok(new { providers = user.ConnectedProviders });
     }
 
-    /// <summary>DELETE /api/auth/me/providers/{provider}</summary>
+    /// <summary>Unlink an OAuth provider from the current user (must have at least one provider remaining).</summary>
     [HttpDelete("me/providers/{provider}")]
     [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> UnlinkProvider(string provider, CancellationToken ct)
     {
         var user = await authService.GetCurrentUserAsync(CurrentUserId, ct);

@@ -16,5 +16,6 @@ public record UserOrgDto(
     string? Slug,
     string Role,
     string? LogoUrl,
-    bool IsActive
+    bool IsActive,
+    string? PrimaryCategory
 );

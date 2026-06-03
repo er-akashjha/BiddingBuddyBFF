@@ -126,6 +126,38 @@ BiddingBuddyBFF/
 
 ## Auth Design
 
+Two authentication paths are supported. Both produce the same `TokenResponseDto` and feed into the same JWT-based session.
+
+| Path | How |
+|---|---|
+| **Email/password** | `POST /api/auth/register` (new account) or `POST /api/auth/login` (existing). Password stored as BCrypt hash (`password_hash` on `users`). |
+| **OAuth (Google / GitHub)** | Browser redirected to provider via `GET /api/auth/oauth/{provider}`. BFF handles callback, upserts user, mints tokens. |
+
+### Email / Password Registration Flow
+
+```
+POST /api/auth/register  { name, email, password, orgName, phone? }
+  1. Reject if email already exists → 409
+  2. Reject if password < 8 chars   → 400
+  3. BCrypt.HashPassword(password)  stored in users.password_hash
+  4. INSERT users row
+  5. INSERT organizations row (owned_by = user.id, name = orgName)
+  6. INSERT org_members row (role = "owner")
+  7. Mint JWT + refresh token        → 201 TokenResponseDto
+```
+
+### Email / Password Login Flow
+
+```
+POST /api/auth/login  { email, password }
+  1. Lookup users WHERE email = $email
+  2. Fail if not found OR password_hash IS NULL  → 401
+  3. BCrypt.Verify(password, password_hash)
+  4. Fail if mismatch                            → 401
+  5. Update last_login_at
+  6. Mint JWT + refresh token                    → 200 TokenResponseDto
+```
+
 ### Social Login Flow
 
 ```
@@ -191,6 +223,7 @@ CREATE TABLE users (
   name           TEXT NOT NULL,
   avatar_url     TEXT,
   phone          TEXT,
+  password_hash  TEXT,          -- NULL for OAuth-only accounts; BCrypt hash for email/password accounts
   is_active      BOOLEAN NOT NULL DEFAULT true,
   last_login_at  TIMESTAMPTZ,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -746,6 +779,8 @@ CREATE TRIGGER trg_gem_integrations_updated_at BEFORE UPDATE ON gem_integrations
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| `POST` | `/auth/register` | None | Create account with email + password; also creates org + sets owner role |
+| `POST` | `/auth/login` | None | Email/password sign-in |
 | `GET`  | `/auth/oauth/{provider}` | None | Redirect to OAuth provider. Providers: `google`, `github`. Query: `?returnUrl=/dashboard` |
 | `GET`  | `/auth/oauth/{provider}/callback` | None | OAuth callback — handled server-side, redirects browser to frontend |
 | `POST` | `/auth/refresh` | None | Rotate refresh token, get new access token |
@@ -754,6 +789,29 @@ CREATE TRIGGER trg_gem_integrations_updated_at BEFORE UPDATE ON gem_integrations
 | `PATCH`| `/auth/me` | Bearer | Update name, phone |
 | `GET`  | `/auth/me/providers` | Bearer | List connected OAuth providers |
 | `DELETE`|`/auth/me/providers/{provider}` | Bearer | Unlink OAuth provider |
+
+**POST /auth/register**
+```
+Request:
+{
+  "name": "Rajesh Kumar",
+  "email": "rajesh@acme.in",
+  "password": "Str0ng!Pass",       -- min 8 chars
+  "orgName": "Acme Technologies Pvt. Ltd.",
+  "phone": "+91 98765 43210"        -- optional
+}
+
+Response 201:  { "accessToken": "jwt...", "refreshToken": "opaque...", "expiresIn": 900 }
+Response 409:  { "error": "Email already registered." }
+Response 400:  { "error": "Password must be at least 8 characters." }
+```
+
+**POST /auth/login**
+```
+Request:   { "email": "rajesh@acme.in", "password": "Str0ng!Pass" }
+Response 200:  { "accessToken": "jwt...", "refreshToken": "opaque...", "expiresIn": 900 }
+Response 401:  { "error": "Invalid email or password." }
+```
 
 **POST /auth/refresh**
 ```
@@ -776,7 +834,8 @@ Response: { "access_token": "jwt...", "refresh_token": "new-opaque-string", "exp
       "slug": "acme-supplies",
       "role": "owner",
       "logo_url": null,
-      "is_active": true
+      "is_active": true,
+      "primary_category": "IT & Software"
     }
   ],
   "connected_providers": ["google"]

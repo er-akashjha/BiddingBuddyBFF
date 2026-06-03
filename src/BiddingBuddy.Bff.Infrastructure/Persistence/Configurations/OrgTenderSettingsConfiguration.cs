@@ -20,5 +20,8 @@ public class OrgTenderSettingsConfiguration : IEntityTypeConfiguration<OrgTender
         b.Property(x => x.AddedBy).HasColumnName("added_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+
+        // Explicit FK declarations — prevents EF from generating shadow 'OrganizationId' / 'TenderId' columns
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
     }
 }

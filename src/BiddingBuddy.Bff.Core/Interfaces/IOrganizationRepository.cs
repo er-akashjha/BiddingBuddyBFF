@@ -8,6 +8,7 @@ public interface IOrganizationRepository
     Task<IReadOnlyList<Organization>> FindByUserIdAsync(Guid userId, CancellationToken ct = default);
     Task<Organization> CreateAsync(Organization org, CancellationToken ct = default);
     Task UpdateAsync(Organization org, CancellationToken ct = default);
+    Task AddMemberAsync(OrgMember member, CancellationToken ct = default);
     Task<bool> IsUserMemberAsync(Guid orgId, Guid userId, CancellationToken ct = default);
     Task<string?> GetUserRoleAsync(Guid orgId, Guid userId, CancellationToken ct = default);
 }

@@ -38,6 +38,12 @@ public class OrganizationRepository(BffDbContext db) : IOrganizationRepository
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task AddMemberAsync(OrgMember member, CancellationToken ct = default)
+    {
+        db.OrgMembers.Add(member);
+        await db.SaveChangesAsync(ct);
+    }
+
     public Task<bool> IsUserMemberAsync(Guid orgId, Guid userId, CancellationToken ct = default)
         => db.OrgMembers.AnyAsync(
             m => m.OrgId == orgId && m.UserId == userId && m.Status == "active", ct);

@@ -187,6 +187,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         b.HasMany(x => x.Items).WithOne(x => x.Order).HasForeignKey(x => x.OrderId);
         b.HasMany(x => x.Milestones).WithOne(x => x.Order).HasForeignKey(x => x.OrderId);
         b.HasMany(x => x.Invoices).WithOne(x => x.Order).HasForeignKey(x => x.OrderId);
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
+        b.HasOne(x => x.Bid).WithMany().HasForeignKey(x => x.BidId).IsRequired(false);
+        b.HasOne(x => x.Tender).WithMany().HasForeignKey(x => x.TenderId).IsRequired(false);
     }
 }
 
@@ -215,6 +218,8 @@ public class EmdPaymentConfiguration : IEntityTypeConfiguration<EmdPayment>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.HasOne(x => x.Organization).WithMany(x => x.EmdPayments).HasForeignKey(x => x.OrgId);
+        b.HasOne(x => x.Bid).WithMany().HasForeignKey(x => x.BidId).IsRequired(false);
+        b.HasOne(x => x.Tender).WithMany().HasForeignKey(x => x.TenderId).IsRequired(false);
     }
 }
 
@@ -290,6 +295,7 @@ public class CompetitorBidObservationConfiguration : IEntityTypeConfiguration<Co
         b.Property(x => x.ObservedDate).HasColumnName("observed_date");
         b.Property(x => x.RawData).HasColumnName("raw_data").HasColumnType("jsonb");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasOne(x => x.Tender).WithMany().HasForeignKey(x => x.TenderId).IsRequired(false);
     }
 }
 
@@ -346,6 +352,8 @@ public class NotificationPreferenceConfiguration : IEntityTypeConfiguration<Noti
         b.Property(x => x.Channel).HasColumnName("channel").HasDefaultValue("in_app");
         b.Property(x => x.EventTypes).HasColumnName("event_types").HasColumnType("text[]");
         b.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(true);
+        b.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId);
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
     }
 }
 
@@ -367,6 +375,7 @@ public class GemIntegrationConfiguration : IEntityTypeConfiguration<GemIntegrati
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => x.OrgId).IsUnique();
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
     }
 }
 
@@ -390,5 +399,6 @@ public class OrgPerformanceSnapshotConfiguration : IEntityTypeConfiguration<OrgP
         b.Property(x => x.TopStates).HasColumnName("top_states").HasColumnType("jsonb");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => new { x.OrgId, x.SnapshotDate }).IsUnique();
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
     }
 }

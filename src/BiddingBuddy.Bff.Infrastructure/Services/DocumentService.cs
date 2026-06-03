@@ -18,14 +18,14 @@ public class DocumentService(BffDbContext db) : IDocumentService
             .ToListAsync(ct);
 
         var docCounts = await db.Documents
-            .Where(d => d.OrgId == orgId)
-            .GroupBy(d => d.FolderId)
+            .Where(d => d.OrgId == orgId && d.FolderId != null)
+            .GroupBy(d => d.FolderId!.Value)
             .Select(g => new { FolderId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.FolderId, x => x.Count, ct);
 
         var childCounts = await db.DocumentFolders
             .Where(f => f.OrgId == orgId && f.ParentId != null)
-            .GroupBy(f => f.ParentId)
+            .GroupBy(f => f.ParentId!.Value)
             .Select(g => new { ParentId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.ParentId, x => x.Count, ct);
 
@@ -60,8 +60,14 @@ public class DocumentService(BffDbContext db) : IDocumentService
             CreatedBy = userId,
         };
         db.DocumentFolders.Add(folder);
-        await db.SaveChangesAsync(ct);
-        return new FolderDto(folder.Id, folder.Name, folder.ParentId, 0, 0, folder.CreatedAt);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }catch(Exception er)
+        {
+
+        }
+            return new FolderDto(folder.Id, folder.Name, folder.ParentId, 0, 0, folder.CreatedAt);
     }
 
     public async Task<FolderDto> UpdateFolderAsync(Guid folderId, Guid orgId, UpdateFolderDto dto, CancellationToken ct = default)

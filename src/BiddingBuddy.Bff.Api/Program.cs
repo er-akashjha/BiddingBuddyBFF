@@ -1,5 +1,6 @@
 using System.Text;
 using BiddingBuddy.Bff.Api.Middleware;
+using BiddingBuddy.Bff.Api.Swagger;
 using BiddingBuddy.Bff.Core.Extensions;
 using BiddingBuddy.Bff.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -41,10 +42,25 @@ builder.Services.AddAuthorization();
 var frontendUrl = builder.Configuration["Frontend:BaseUrl"] ?? "http://localhost:3000";
 builder.Services.AddCors(opt =>
     opt.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins(frontendUrl)
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials()));
+    {
+        if (builder.Environment.IsDevelopment())
+        {
+            // Allow any localhost port in dev — avoids restarting BFF when frontend port changes
+            policy.SetIsOriginAllowed(origin =>
+                       Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
+                       (uri.Host == "localhost" || uri.Host == "127.0.0.1"))
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
+        else
+        {
+            policy.WithOrigins(frontendUrl)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
+    }));
 
 // ── Controllers + Swagger ─────────────────────────────────────────────────────
 builder.Services.AddControllers();
@@ -77,6 +93,16 @@ builder.Services.AddSwaggerGen(c =>
             Array.Empty<string>()
         }
     });
+
+    // Inject X-Org-Id on org-scoped routes and X-Api-Key on /internal/* routes
+    c.OperationFilter<OrgIdHeaderFilter>();
+    c.OperationFilter<ApiKeyHeaderFilter>();
+
+    // Wire up XML doc comments so Swagger shows descriptions and response schemas
+    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+        c.IncludeXmlComments(xmlPath);
 });
 
 // ── Exception handling ────────────────────────────────────────────────────────
@@ -86,15 +112,15 @@ builder.Services.AddExceptionHandler<BiddingBuddy.Bff.Api.Middleware.GlobalExcep
 // ── Build ─────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// Swagger available in all environments (restrict via reverse proxy in prod if needed)
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "BiddingBuddy BFF v1");
-        c.RoutePrefix = "swagger";
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "BiddingBuddy BFF v1");
+    c.RoutePrefix        = "swagger";
+    c.DisplayRequestDuration();
+    c.DefaultModelsExpandDepth(-1);   // collapse schemas by default — less noise
+});
 
 app.UseExceptionHandler();
 app.UseHttpsRedirection();

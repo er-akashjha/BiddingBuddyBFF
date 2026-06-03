@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using BCrypt.Net;
 using BiddingBuddy.Bff.Core.DTOs.Auth;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
@@ -14,6 +15,59 @@ public class AuthService(
     IOAuthProviderService oauthProvider,
     TokenService tokenService) : IAuthService
 {
+    public async Task<TokenResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
+    {
+        if (dto.Password.Length < 8)
+            throw new ArgumentException("Password must be at least 8 characters.");
+
+        if (await userRepo.FindByEmailAsync(dto.Email, ct) is not null)
+            throw new InvalidOperationException("EMAIL_EXISTS");
+
+        var user = await userRepo.CreateAsync(new User
+        {
+            Email = dto.Email,
+            Name = dto.Name,
+            Phone = dto.Phone,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
+            LastLoginAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        }, ct);
+
+        var org = await orgRepo.CreateAsync(new Organization
+        {
+            OwnedBy = user.Id,
+            Name = dto.OrgName,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        }, ct);
+
+        await orgRepo.AddMemberAsync(new OrgMember
+        {
+            OrgId = org.Id,
+            UserId = user.Id,
+            Role = "owner",
+            Status = "active",
+            JoinedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+        }, ct);
+
+        return await IssueTokensAsync(user, ct);
+    }
+
+    public async Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default)
+    {
+        var user = await userRepo.FindByEmailAsync(dto.Email, ct);
+        if (user is null || user.PasswordHash is null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
+            throw new UnauthorizedAccessException("INVALID_CREDENTIALS");
+
+        user.LastLoginAt = DateTime.UtcNow;
+        await userRepo.UpdateAsync(user, ct);
+
+        return await IssueTokensAsync(user, ct);
+    }
+
     public async Task<TokenResponseDto> HandleOAuthCallbackAsync(
         string provider, string code, CancellationToken ct = default)
     {
@@ -154,7 +208,7 @@ public class AuthService(
         foreach (var org in orgs)
         {
             var role = await orgRepo.GetUserRoleAsync(org.Id, userId, ct) ?? "viewer";
-            result.Add(new UserOrgDto(org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive));
+            result.Add(new UserOrgDto(org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive, org.PrimaryCategory));
         }
         return result;
     }

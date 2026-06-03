@@ -13,8 +13,6 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
         var existing = await db.Tenders
             .FirstOrDefaultAsync(t => t.GemTenderId == dto.GemTenderId, ct);
 
-        bool created;
-
         if (existing is null)
         {
             var tender = new Tender

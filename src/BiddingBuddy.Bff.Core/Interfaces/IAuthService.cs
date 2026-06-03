@@ -4,6 +4,8 @@ namespace BiddingBuddy.Bff.Core.Interfaces;
 
 public interface IAuthService
 {
+    Task<TokenResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default);
+    Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default);
     Task<TokenResponseDto> HandleOAuthCallbackAsync(string provider, string code, CancellationToken ct = default);
     Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default);
     Task LogoutAsync(string refreshToken, CancellationToken ct = default);
