@@ -231,4 +231,49 @@ public class DocumentsController(
         var version = await documentService.AddVersionAsync(id, CurrentOrgId, CurrentUserId, dto, ct);
         return Ok(version);
     }
+
+    // ── Presigned GET URLs ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Get a presigned URL to view the document inline in the browser (PDF viewer, image, etc.).
+    /// Open the returned URL directly — no additional headers needed.
+    /// URL expires in PresignTtlSeconds (default 15 min).
+    /// </summary>
+    [HttpGet("{id:guid}/view-url")]
+    [ProducesResponseType(typeof(DocumentUrlResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetViewUrl(Guid id, CancellationToken ct)
+    {
+        var doc = await documentService.GetDocumentAsync(id, CurrentOrgId, ct);
+
+        var presigned = await r2Storage.CreatePresignedGetAsync(
+            objectKey: doc.S3Key,
+            fileName:  doc.FileName,
+            inline:    true,
+            ct:        ct);
+
+        return Ok(new DocumentUrlResponseDto(presigned.Url, presigned.ExpiresAt));
+    }
+
+    /// <summary>
+    /// Get a presigned URL to download the document as a file attachment.
+    /// Open the returned URL in the browser or pass it to a download handler —
+    /// the browser will prompt a Save As dialog.
+    /// URL expires in PresignTtlSeconds (default 15 min).
+    /// </summary>
+    [HttpGet("{id:guid}/download-url")]
+    [ProducesResponseType(typeof(DocumentUrlResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDownloadUrl(Guid id, CancellationToken ct)
+    {
+        var doc = await documentService.GetDocumentAsync(id, CurrentOrgId, ct);
+
+        var presigned = await r2Storage.CreatePresignedGetAsync(
+            objectKey: doc.S3Key,
+            fileName:  doc.FileName,
+            inline:    false,
+            ct:        ct);
+
+        return Ok(new DocumentUrlResponseDto(presigned.Url, presigned.ExpiresAt));
+    }
 }

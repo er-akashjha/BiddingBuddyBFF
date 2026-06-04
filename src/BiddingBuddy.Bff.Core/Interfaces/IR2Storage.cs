@@ -12,7 +12,29 @@ public interface IR2Storage
         string contentType,
         long   sizeBytes,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Generate a presigned GET URL for viewing or downloading a stored object.
+    /// </summary>
+    /// <param name="objectKey">The R2 object key stored in the documents table.</param>
+    /// <param name="fileName">Original file name used in the Content-Disposition header.</param>
+    /// <param name="inline">
+    /// <c>true</c> → browser opens inline (view); <c>false</c> → browser downloads (attachment).
+    /// </param>
+    Task<PresignedGet> CreatePresignedGetAsync(
+        string objectKey,
+        string fileName,
+        bool   inline,
+        CancellationToken ct = default);
 }
+
+/// <summary>Result returned to the client so it can GET (view or download) a stored file from R2.</summary>
+public record PresignedGet(
+    /// <summary>Presigned GET URL. Open in browser to view inline or trigger a download.</summary>
+    string Url,
+    /// <summary>UTC timestamp when the URL expires.</summary>
+    DateTime ExpiresAt
+);
 
 /// <summary>Result returned to the client so it can PUT the file directly to R2.</summary>
 public record PresignedUpload(

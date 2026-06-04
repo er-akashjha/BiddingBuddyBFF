@@ -4,6 +4,7 @@ namespace BiddingBuddy.Bff.Core.DTOs.Tenders;
 public record TenderSearchQueryDto
 {
     public string?   NameContains      { get; init; }
+    public string?   SourceTenderID    { get; init; }
     public string?   Status            { get; init; }
     public string?   CategoryPrimary   { get; init; }
     public string?   CategorySecondary { get; init; }
@@ -110,6 +111,17 @@ public record TenderSearchItemDto(
 /// <summary>Paged result wrapper returned by BiddingBuddyServices and forwarded to the client</summary>
 public record TenderSearchResultDto(
     IReadOnlyList<TenderSearchItemDto> Items,
+    int  TotalCount,
+    int  Page,
+    int  PageSize,
+    int  TotalPages,
+    bool HasNextPage,
+    bool HasPreviousPage
+);
+
+/// <summary>Paged tender list returned to the BFF client (items translated to TenderListItemDto)</summary>
+public record PagedTenderListDto(
+    IReadOnlyList<TenderListItemDto> Items,
     int  TotalCount,
     int  Page,
     int  PageSize,

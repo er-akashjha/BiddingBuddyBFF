@@ -106,6 +106,60 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         return rawResult.Items.ToListDto();
     }
 
+    public async Task<PagedTenderListDto> SearchTendersPagedAsync(
+        TenderSearchQueryDto query, CancellationToken ct = default)
+    {
+        var url = BuildSearchUrl(query);
+        _log.LogDebug("BiddingBuddyServices → GET {Url}", url);
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer", await GetTokenAsync(ct));
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.SendAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Network error reaching BiddingBuddyServices at {Base}", _http.BaseAddress);
+            throw new InvalidOperationException(
+                $"Could not connect to BiddingBuddyServices: {ex.Message}", ex);
+        }
+
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            _log.LogWarning("BiddingBuddyServices returned 401 — refreshing token and retrying.");
+            InvalidateToken();
+            request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Bearer", await GetTokenAsync(ct));
+            response = await _http.SendAsync(request, ct);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new InvalidOperationException(
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+        }
+
+        var stream    = await response.Content.ReadAsStreamAsync(ct);
+        var rawResult = await JsonSerializer.DeserializeAsync<TenderSearchResultDto>(stream, _json, ct)
+            ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
+
+        return new PagedTenderListDto(
+            Items:           rawResult.Items.ToListDto(),
+            TotalCount:      rawResult.TotalCount,
+            Page:            rawResult.Page,
+            PageSize:        rawResult.PageSize,
+            TotalPages:      rawResult.TotalPages,
+            HasNextPage:     rawResult.HasNextPage,
+            HasPreviousPage: rawResult.HasPreviousPage);
+    }
+
     public async Task<TenderDetailDto> GetTenderAsync(
         string tenderId, CancellationToken ct = default)
     {
@@ -213,7 +267,13 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
     {
         var qs = HttpUtility.ParseQueryString(string.Empty);
 
-        if (!string.IsNullOrWhiteSpace(q.NameContains))      qs["NameContains"]      = q.NameContains;
+        if (!string.IsNullOrWhiteSpace(q.NameContains))
+        {
+            qs["NameContains"] = q.NameContains;
+            //qs["CategoryPrimary"] = q.NameContains;
+            qs["Tag"] = q.NameContains;
+            qs["SourceTenderId"] = q.NameContains;
+        }
         if (!string.IsNullOrWhiteSpace(q.Status))             qs["Status"]             = q.Status;
         if (!string.IsNullOrWhiteSpace(q.CategoryPrimary))    qs["CategoryPrimary"]    = q.CategoryPrimary;
         if (!string.IsNullOrWhiteSpace(q.CategorySecondary))  qs["CategorySecondary"]  = q.CategorySecondary;

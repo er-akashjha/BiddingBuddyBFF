@@ -10,6 +10,14 @@ public record RequestUploadUrlDto(
     int FileSizeKb
 );
 
+/// <summary>Response for view and download URL endpoints.</summary>
+public record DocumentUrlResponseDto(
+    /// <summary>Presigned GET URL — open directly in a browser or pass to a download handler.</summary>
+    string Url,
+    /// <summary>UTC time when the URL expires (default 15 min).</summary>
+    DateTime ExpiresAt
+);
+
 /// <summary>Response — gives the client everything it needs to PUT the file directly to R2.</summary>
 public record UploadUrlResponseDto(
     /// <summary>Presigned PUT URL. Valid until ExpiresAt.</summary>

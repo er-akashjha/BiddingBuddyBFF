@@ -115,6 +115,7 @@ public class DocumentFolderConfiguration : IEntityTypeConfiguration<DocumentFold
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => x.OrgId);
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
         b.HasOne(x => x.Parent).WithMany(x => x.Children).HasForeignKey(x => x.ParentId).IsRequired(false);
     }
 }
@@ -142,6 +143,8 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => x.OrgId);
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
+        b.HasOne(x => x.Folder).WithMany(x => x.Documents).HasForeignKey(x => x.FolderId).IsRequired(false);
         b.HasMany(x => x.Versions).WithOne(x => x.Document).HasForeignKey(x => x.DocumentId);
     }
 }

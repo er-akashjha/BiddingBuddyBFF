@@ -13,7 +13,7 @@ public class TendersController(
     ITenderService tenderService,
     IBiddingBuddyServicesClient servicesClient) : BffControllerBase
 {
-    /// <summary>Paginated tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
+    /// <summary>Tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
     [HttpGet]
     [ProducesResponseType(typeof(List<TenderListItemDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
@@ -21,6 +21,17 @@ public class TendersController(
     public async Task<IActionResult> List([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
     {
         var result = await servicesClient.SearchTendersAsync(query, ct);
+        return Ok(result);
+    }
+
+    /// <summary>Paged tender list from BiddingBuddyServices (MongoDB). Forwards pagination metadata to the client.</summary>
+    [HttpGet("paged")]
+    [ProducesResponseType(typeof(PagedTenderListDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ListPaged([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
+    {
+        var result = await servicesClient.SearchTendersPagedAsync(query, ct);
         return Ok(result);
     }
 
