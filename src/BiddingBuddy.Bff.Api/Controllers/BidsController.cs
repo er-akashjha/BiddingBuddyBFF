@@ -98,6 +98,29 @@ public class BidsController(IBidService bidService) : BffControllerBase
         return Ok(activity);
     }
 
+    // ── Comments ──────────────────────────────────────────────────────────────
+
+    /// <summary>List all comments on a bid, oldest first, with author names.</summary>
+    [HttpGet("{id:guid}/comments")]
+    [ProducesResponseType(typeof(IReadOnlyList<BidCommentDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetComments(Guid id, CancellationToken ct)
+    {
+        var comments = await bidService.GetCommentsAsync(id, CurrentOrgId, ct);
+        return Ok(comments);
+    }
+
+    /// <summary>Save a comment on a bid authored by the current user.</summary>
+    [HttpPost("{id:guid}/comments")]
+    [ProducesResponseType(typeof(BidCommentDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AddComment(Guid id, [FromBody] AddCommentDto dto, CancellationToken ct)
+    {
+        var comment = await bidService.AddCommentAsync(id, CurrentOrgId, CurrentUserId, dto, ct);
+        return CreatedAtAction(nameof(GetComments), new { id }, comment);
+    }
+
     // ── Checklist ─────────────────────────────────────────────────────────────
 
     /// <summary>Get all checklist items for a bid, ordered by sort_order.</summary>

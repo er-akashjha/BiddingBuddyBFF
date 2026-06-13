@@ -15,6 +15,9 @@ public interface IBidService
     Task<IReadOnlyList<BidActivityDto>> GetActivitiesAsync(Guid bidId, Guid orgId, CancellationToken ct = default);
     Task<BidActivityDto> AddNoteAsync(Guid bidId, Guid orgId, Guid actorId, AddNoteDto dto, CancellationToken ct = default);
 
+    Task<IReadOnlyList<BidCommentDto>> GetCommentsAsync(Guid bidId, Guid orgId, CancellationToken ct = default);
+    Task<BidCommentDto> AddCommentAsync(Guid bidId, Guid orgId, Guid authorId, AddCommentDto dto, CancellationToken ct = default);
+
     Task<IReadOnlyList<ChecklistItemDto>> GetChecklistAsync(Guid bidId, Guid orgId, CancellationToken ct = default);
     Task<ChecklistItemDto> CreateChecklistItemAsync(Guid bidId, Guid orgId, CreateChecklistItemDto dto, CancellationToken ct = default);
     Task<ChecklistItemDto> UpdateChecklistItemAsync(Guid itemId, Guid bidId, Guid orgId, Guid actorId, UpdateChecklistItemDto dto, CancellationToken ct = default);

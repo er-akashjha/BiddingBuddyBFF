@@ -85,6 +85,18 @@ public record BidActivityDto(
 
 public record AddNoteDto(string Note);
 
+public record BidCommentDto(
+    Guid Id,
+    Guid BidId,
+    Guid AuthorId,
+    string AuthorName,
+    string Body,
+    DateTime CreatedAt,
+    DateTime UpdatedAt
+);
+
+public record AddCommentDto(string Body);
+
 public record ChecklistItemDto(
     Guid Id,
     string Title,

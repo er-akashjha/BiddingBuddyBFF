@@ -26,4 +26,5 @@ public class Bid
     public User? AssignedUser { get; set; }
     public ICollection<BidActivity> Activities { get; set; } = [];
     public ICollection<BidChecklistItem> ChecklistItems { get; set; } = [];
+    public ICollection<BidComment> Comments { get; set; } = [];
 }
