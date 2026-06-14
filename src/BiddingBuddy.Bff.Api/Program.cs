@@ -130,4 +130,9 @@ app.UseMiddleware<OrgContextMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 
+// Liveness probe for Docker/compose healthchecks + rolling deploys.
+// Anonymous + excluded from OrgContextMiddleware (see middleware whitelist).
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "BiddingBuddyBFF" }))
+   .AllowAnonymous();
+
 app.Run();
