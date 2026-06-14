@@ -14,6 +14,7 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     // Orgs
     public DbSet<Organization> Organizations => Set<Organization>();
     public DbSet<OrgMember> OrgMembers => Set<OrgMember>();
+    public DbSet<OrganizationInvite> OrganizationInvites => Set<OrganizationInvite>();
 
     // Tenders
     public DbSet<Tender> Tenders => Set<Tender>();
@@ -52,9 +53,16 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<AiAnalysisResult> AiAnalysisResults => Set<AiAnalysisResult>();
     public DbSet<OrgPerformanceSnapshot> OrgPerformanceSnapshots => Set<OrgPerformanceSnapshot>();
 
-    // Notifications
-    public DbSet<Notification> Notifications => Set<Notification>();
+    // In-app notification inbox (was Notifications; renamed to free the name
+    // for the dispatch-event table below)
+    public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
     public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
+
+    // Notification dispatch subsystem (event → per-channel deliveries → audit log)
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
+    public DbSet<NotificationTemplate> NotificationTemplates => Set<NotificationTemplate>();
+    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
 
     // Integrations
     public DbSet<GemIntegration> GemIntegrations => Set<GemIntegration>();

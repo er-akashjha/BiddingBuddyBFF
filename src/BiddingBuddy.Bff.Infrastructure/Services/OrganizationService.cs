@@ -1,12 +1,20 @@
+using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
-public class OrganizationService(BffDbContext db, IUserRepository userRepo) : IOrganizationService
+public class OrganizationService(
+    BffDbContext db,
+    IUserRepository userRepo,
+    INotificationPublisher notifications,
+    IConfiguration config,
+    ILogger<OrganizationService> log) : IOrganizationService
 {
     public async Task<OrgDetailDto> CreateAsync(Guid ownerId, CreateOrgDto dto, CancellationToken ct = default)
     {
@@ -100,42 +108,134 @@ public class OrganizationService(BffDbContext db, IUserRepository userRepo) : IO
         return members.Select(MapMember).ToList();
     }
 
-    public async Task<OrgMemberDto> InviteMemberAsync(Guid orgId, Guid invitedBy, InviteMemberDto dto, CancellationToken ct = default)
+    public async Task<IReadOnlyList<PendingInviteDto>> GetPendingInvitesAsync(Guid orgId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        return await db.OrganizationInvites
+            .Where(i => i.OrgId == orgId && i.AcceptedAt == null && i.ExpiresAt > now)
+            .OrderByDescending(i => i.CreatedAt)
+            .Select(i => new PendingInviteDto(
+                i.Id,
+                i.Email,
+                i.Role,
+                i.Department,
+                i.InvitedBy,
+                db.Users.Where(u => u.Id == i.InvitedBy).Select(u => u.Name).FirstOrDefault(),
+                i.ExpiresAt,
+                i.CreatedAt))
+            .ToListAsync(ct);
+    }
+
+    public async Task RevokePendingInviteAsync(Guid orgId, Guid inviteId, Guid requestingUserId, CancellationToken ct = default)
+    {
+        await RequireRoleAsync(orgId, requestingUserId, ["owner", "admin"], ct);
+
+        var invite = await db.OrganizationInvites
+            .FirstOrDefaultAsync(i => i.Id == inviteId && i.OrgId == orgId, ct)
+            ?? throw new KeyNotFoundException("Invite not found.");
+
+        if (invite.AcceptedAt is not null)
+            return; // already accepted/superseded — no-op
+
+        invite.AcceptedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<InviteMemberResultDto> InviteMemberAsync(Guid orgId, Guid invitedBy, InviteMemberDto dto, CancellationToken ct = default)
     {
         await RequireRoleAsync(orgId, invitedBy, ["owner", "admin"], ct);
 
-        var user = await userRepo.FindByEmailAsync(dto.Email, ct)
-            ?? throw new KeyNotFoundException($"No user with email '{dto.Email}'.");
+        var email = (dto.Email ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(email))
+            throw new ArgumentException("Email is required.", nameof(dto));
 
-        var existing = await db.OrgMembers
-            .FirstOrDefaultAsync(m => m.OrgId == orgId && m.UserId == user.Id, ct);
+        var user = await userRepo.FindByEmailAsync(email, ct);
 
-        if (existing is not null)
+        // ── Case A: invitee already has a user account → grant membership now ──
+        if (user is not null)
         {
-            existing.Status     = "active";
-            existing.Role       = dto.Role;
-            existing.Department = dto.Department;
-            existing.JoinedAt   = DateTime.UtcNow;
-        }
-        else
-        {
-            existing = new OrgMember
+            var existing = await db.OrgMembers
+                .FirstOrDefaultAsync(m => m.OrgId == orgId && m.UserId == user.Id, ct);
+
+            if (existing is not null)
             {
-                OrgId      = orgId,
-                UserId     = user.Id,
-                Role       = dto.Role,
-                Department = dto.Department,
-                Status     = "active",
-                InvitedBy  = invitedBy,
-                JoinedAt   = DateTime.UtcNow,
-            };
-            db.OrgMembers.Add(existing);
+                existing.Status     = "active";
+                existing.Role       = dto.Role;
+                existing.Department = dto.Department;
+                existing.JoinedAt   = DateTime.UtcNow;
+            }
+            else
+            {
+                existing = new OrgMember
+                {
+                    OrgId      = orgId,
+                    UserId     = user.Id,
+                    Role       = dto.Role,
+                    Department = dto.Department,
+                    Status     = "active",
+                    InvitedBy  = invitedBy,
+                    JoinedAt   = DateTime.UtcNow,
+                };
+                db.OrgMembers.Add(existing);
+            }
+
+            await db.SaveChangesAsync(ct);
+
+            existing.User = user;
+
+            // Fire TEAM_INVITATION (Email + InApp) with a deep-link to the org page —
+            // they're already a user, so no registration step needed.
+            var deepLink = BuildDeepLink(orgId);
+            await SendInvitationAsync(invitedBy, user.Id, user.Email, user.Name, orgId, deepLink, ct);
+
+            return new InviteMemberResultDto(
+                Status:       "added",
+                Member:       MapMember(existing),
+                InvitedEmail: null,
+                ExpiresAt:    null);
         }
 
+        // ── Case B: no user with this email → create a pending invite ──────────
+
+        // Cancel any prior pending invite for this email/org by accepting it as expired —
+        // simpler than DELETE and preserves history. The partial UNIQUE index on
+        // (org_id, email) WHERE accepted_at IS NULL would otherwise block the new INSERT.
+        var prior = await db.OrganizationInvites
+            .Where(i => i.OrgId == orgId && i.Email == email && i.AcceptedAt == null)
+            .ToListAsync(ct);
+        foreach (var p in prior)
+            p.AcceptedAt = DateTime.UtcNow;     // status "superseded"; the new invite supersedes it
+
+        var (rawToken, tokenHash) = GenerateInviteToken();
+        var expiresAt = DateTime.UtcNow.AddDays(7);
+
+        var invite = new OrganizationInvite
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            Email      = email,
+            Role       = dto.Role,
+            Department = dto.Department,
+            InvitedBy  = invitedBy,
+            TokenHash  = tokenHash,
+            ExpiresAt  = expiresAt,
+            CreatedAt  = DateTime.UtcNow,
+        };
+        db.OrganizationInvites.Add(invite);
         await db.SaveChangesAsync(ct);
 
-        existing.User = user;
-        return MapMember(existing);
+        // Email a registration link carrying the raw token. The recipient registers
+        // via POST /api/auth/register with this token in the body; AuthService
+        // validates + consumes the invite and joins them to this org.
+        var registerLink = BuildRegisterLink(rawToken, email);
+        await SendInvitationAsync(invitedBy, recipientUserId: null, email, recipientName: null,
+                                  orgId, registerLink, ct);
+
+        return new InviteMemberResultDto(
+            Status:       "invited",
+            Member:       null,
+            InvitedEmail: email,
+            ExpiresAt:    expiresAt);
     }
 
     public async Task<OrgMemberDto> UpdateMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, UpdateMemberDto dto, CancellationToken ct = default)
@@ -202,4 +302,123 @@ public class OrganizationService(BffDbContext db, IUserRepository userRepo) : IO
         m.User?.AvatarUrl,
         m.Role, m.Department, m.Status,
         m.JoinedAt);
+
+    /// <summary>
+    /// Fire-and-forget TEAM_INVITATION notification. Failures are logged but never
+    /// surfaced — the calling branch's DB row (membership or pending invite) is
+    /// already persisted by the time this runs.
+    ///
+    /// <para>Two callers:</para>
+    /// <list type="bullet">
+    ///   <item>Existing user → <paramref name="recipientUserId"/> is the user's id,
+    ///         <paramref name="invitationLink"/> is a deep-link to the org page,
+    ///         and the InApp channel goes to that user.</item>
+    ///   <item>New invite → <paramref name="recipientUserId"/> is <c>null</c>,
+    ///         <paramref name="invitationLink"/> carries a single-use registration
+    ///         token, and only Email is sent (InApp has no inbox for an
+    ///         unregistered recipient).</item>
+    /// </list>
+    /// </summary>
+    private async Task SendInvitationAsync(
+        Guid invitedBy,
+        Guid? recipientUserId,
+        string recipientEmail,
+        string? recipientName,
+        Guid orgId,
+        string invitationLink,
+        CancellationToken ct)
+    {
+        try
+        {
+            var orgName = await db.Organizations
+                .Where(o => o.Id == orgId)
+                .Select(o => o.Name)
+                .FirstOrDefaultAsync(ct) ?? string.Empty;
+
+            var inviterName = await db.Users
+                .Where(u => u.Id == invitedBy)
+                .Select(u => u.Name)
+                .FirstOrDefaultAsync(ct) ?? string.Empty;
+
+            // First name = recipientName's first token if we have it, else the local
+            // part of their email (handlebars can't fix a missing key, so something
+            // sensible-looking beats "{{FirstName}}").
+            var firstName = !string.IsNullOrWhiteSpace(recipientName)
+                ? FirstName(recipientName!)
+                : recipientEmail.Split('@')[0];
+
+            var recipients = new List<NotificationRecipientDto>
+            {
+                new(NotificationChannel.Email, recipientEmail),
+            };
+            if (recipientUserId.HasValue)
+            {
+                // Only existing users have an in-app inbox to receive a notification.
+                recipients.Add(new NotificationRecipientDto(NotificationChannel.InApp, recipientUserId.Value.ToString()));
+            }
+
+            await notifications.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "TEAM_INVITATION",
+                UserId:       recipientUserId,
+                Payload:      new Dictionary<string, object>
+                {
+                    ["FirstName"]        = firstName,
+                    ["InvitedByName"]    = inviterName,
+                    ["OrganizationName"] = orgName,
+                    ["InvitationLink"]   = invitationLink,
+                },
+                Recipients: recipients), ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex,
+                "TEAM_INVITATION notification failed for {Recipient} into org {OrgId}; the invite itself succeeded.",
+                recipientEmail, orgId);
+        }
+    }
+
+    private string BuildDeepLink(Guid orgId)
+    {
+        var frontendBase = (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+        return $"{frontendBase}/orgs/{orgId}";
+    }
+
+    private string BuildRegisterLink(string rawToken, string email)
+    {
+        var frontendBase = (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+        // Recipient lands on the SPA's signup page (note: SPA route is /signup,
+        // not /auth/register — the API path is unrelated). SignupPage reads both
+        // the `invite` and `email` query params, pre-fills + locks the email
+        // field, and forwards the token as `inviteToken` to POST /api/auth/register.
+        //
+        // The email is NOT a secret — the recipient owns it and just received this
+        // message at that address. The token IS the secret (it's bound to this
+        // email server-side; mismatched email at register time → INVITE_INVALID).
+        return $"{frontendBase}/signup" +
+               $"?invite={Uri.EscapeDataString(rawToken)}" +
+               $"&email={Uri.EscapeDataString(email)}";
+    }
+
+    /// <summary>
+    /// Returns (rawToken, sha256-hex hash). The raw token is single-use and high
+    /// entropy (32 random bytes, URL-safe base64). Only the hash is persisted;
+    /// the raw token leaves the BFF exactly once — via the invite email.
+    /// </summary>
+    private static (string Raw, string Hash) GenerateInviteToken()
+    {
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        var raw = Convert.ToBase64String(bytes)
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');   // url-safe
+        var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+        var hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+        return (raw, hash);
+    }
+
+    private static string FirstName(string? fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return string.Empty;
+        var space = fullName.IndexOf(' ');
+        return space < 0 ? fullName.Trim() : fullName[..space].Trim();
+    }
 }

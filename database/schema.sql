@@ -581,7 +581,11 @@ CREATE INDEX idx_perf_snapshots_org ON org_performance_snapshots (org_id);
 -- 11. NOTIFICATIONS
 -- ─────────────────────────────────────────────────────────────────
 
-CREATE TABLE notifications (
+-- In-app notification inbox (was `notifications`; renamed when the notification
+-- subsystem took the `notifications` name for dispatch events). The publisher
+-- writes here only for the InApp channel — fan-out from notification_deliveries
+-- is processor-owned.
+CREATE TABLE user_notifications (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id       UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -595,8 +599,83 @@ CREATE TABLE notifications (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_notifications_user_unread ON notifications (user_id, is_read);
-CREATE INDEX idx_notifications_org         ON notifications (org_id);
+CREATE INDEX idx_user_notifications_user_unread ON user_notifications (user_id, is_read);
+CREATE INDEX idx_user_notifications_org         ON user_notifications (org_id);
+
+-- ── Notification dispatch subsystem (BFF publisher + BidProcessor consumer) ──
+
+CREATE TABLE notification_templates (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code         VARCHAR(100) NOT NULL,
+    channel      VARCHAR(20)  NOT NULL,
+    name         VARCHAR(200) NOT NULL,
+    subject      VARCHAR(500),
+    body         TEXT         NOT NULL,
+    body_format  VARCHAR(20)  NOT NULL DEFAULT 'Html',
+    metadata     JSONB        NOT NULL DEFAULT '{}',
+    is_active    BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ,
+    CONSTRAINT uq_template_code_channel UNIQUE (code, channel),
+    CONSTRAINT ck_template_channel CHECK (channel IN ('Email','Sms','WhatsApp','Firebase','InApp')),
+    CONSTRAINT ck_template_format  CHECK (body_format IN ('Html','Text','Markdown'))
+);
+
+CREATE TABLE notifications (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category       VARCHAR(20)  NOT NULL,
+    template_code  VARCHAR(100) NOT NULL,
+    user_id        UUID,
+    payload        JSONB        NOT NULL DEFAULT '{}',
+    correlation_id UUID         NOT NULL DEFAULT gen_random_uuid(),
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_notification_category CHECK (category IN ('Transactional','Information','Marketing'))
+);
+
+CREATE TABLE notification_deliveries (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    notification_id   UUID         NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+    channel           VARCHAR(20)  NOT NULL,
+    recipient_address VARCHAR(500) NOT NULL,
+    status            VARCHAR(20)  NOT NULL DEFAULT 'Pending',
+    retry_count       INTEGER      NOT NULL DEFAULT 0,
+    max_retries       INTEGER      NOT NULL DEFAULT 5,
+    next_retry_at     TIMESTAMPTZ,
+    locked_at         TIMESTAMPTZ,
+    locked_by         VARCHAR(100),
+    last_error        TEXT,
+    version           INTEGER      NOT NULL DEFAULT 0,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    processed_at      TIMESTAMPTZ,
+    failed_at         TIMESTAMPTZ,
+    CONSTRAINT uq_delivery_per_channel UNIQUE (notification_id, channel),
+    CONSTRAINT ck_delivery_channel CHECK (channel IN ('Email','Sms','WhatsApp','Firebase','InApp')),
+    CONSTRAINT ck_delivery_status  CHECK (status IN ('Pending','Processing','Retrying','Completed','Failed'))
+);
+
+CREATE INDEX ix_deliveries_retry_scan   ON notification_deliveries (next_retry_at) WHERE status IN ('Pending','Retrying');
+CREATE INDEX ix_deliveries_stale        ON notification_deliveries (locked_at)     WHERE status = 'Processing';
+CREATE INDEX ix_deliveries_notification ON notification_deliveries (notification_id);
+
+CREATE TABLE notification_logs (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    delivery_id         UUID         NOT NULL REFERENCES notification_deliveries(id) ON DELETE CASCADE,
+    notification_id     UUID         NOT NULL,
+    channel             VARCHAR(20)  NOT NULL,
+    provider            VARCHAR(100),
+    recipient_address   VARCHAR(500),
+    subject             VARCHAR(500),
+    status              VARCHAR(20)  NOT NULL,
+    provider_message_id VARCHAR(255),
+    attempt_number      INTEGER      NOT NULL,
+    error_message       TEXT,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    completed_at        TIMESTAMPTZ,
+    CONSTRAINT ck_log_status CHECK (status IN ('Sent','Failed'))
+);
+
+CREATE INDEX ix_logs_delivery     ON notification_logs (delivery_id);
+CREATE INDEX ix_logs_notification ON notification_logs (notification_id);
 
 CREATE TABLE notification_preferences (
   user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
