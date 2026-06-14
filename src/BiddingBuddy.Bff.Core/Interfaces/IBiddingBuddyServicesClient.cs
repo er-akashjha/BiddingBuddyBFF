@@ -11,4 +11,5 @@ public interface IBiddingBuddyServicesClient
 
     Task<TenderDetailDto> GetTenderAsync(string tenderId, CancellationToken ct = default);
     Task<List<TenderListItemDto>> SearchTendersAsync(TenderSearchQueryDto query, CancellationToken ct = default);
+    Task<PagedTenderListDto> SearchTendersPagedAsync(TenderSearchQueryDto query, CancellationToken ct = default);
 }

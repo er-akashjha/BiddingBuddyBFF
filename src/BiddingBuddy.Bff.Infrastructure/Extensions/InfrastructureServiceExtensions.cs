@@ -72,6 +72,9 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IGemIntegrationService, GemIntegrationService>();
         services.AddScoped<IInternalPipelineService, InternalPipelineService>();
 
+        // Schema migrator (runs embedded SQL scripts via /internal/migrations)
+        services.AddScoped<IDbMigrator, DbMigrator>();
+
         return services;
     }
 }

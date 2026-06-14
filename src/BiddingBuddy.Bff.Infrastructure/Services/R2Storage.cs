@@ -21,6 +21,41 @@ public sealed class R2Storage(
 {
     private readonly R2Options _cfg = options.Value;
 
+    public Task<PresignedGet> CreatePresignedGetAsync(
+        string objectKey,
+        string fileName,
+        bool   inline,
+        CancellationToken ct = default)
+    {
+        var expiresAt = DateTime.UtcNow.AddSeconds(_cfg.PresignTtlSeconds);
+
+        // Encode the file name for the Content-Disposition header value
+        var encodedName = Uri.EscapeDataString(fileName);
+        var disposition  = inline
+            ? $"inline; filename=\"{encodedName}\""
+            : $"attachment; filename=\"{encodedName}\"";
+
+        var request = new GetPreSignedUrlRequest
+        {
+            BucketName  = _cfg.BucketName,
+            Key         = objectKey,
+            Verb        = HttpVerb.GET,
+            Expires     = expiresAt,
+            ResponseHeaderOverrides = new ResponseHeaderOverrides
+            {
+                ContentDisposition = disposition,
+            },
+        };
+
+        var url = s3.GetPreSignedURL(request);
+
+        log.LogDebug(
+            "R2 presigned GET ({Mode}) generated for key={Key} expires={Expires}",
+            inline ? "inline" : "attachment", objectKey, expiresAt);
+
+        return Task.FromResult(new PresignedGet(url, expiresAt));
+    }
+
     public Task<PresignedUpload> CreatePresignedPutAsync(
         string objectKey,
         string contentType,

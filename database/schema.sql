@@ -262,6 +262,21 @@ CREATE TABLE bid_checklist_items (
 
 CREATE INDEX idx_bid_checklist_bid_id ON bid_checklist_items (bid_id);
 
+CREATE TABLE bid_comments (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bid_id       UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
+  author_id    UUID NOT NULL REFERENCES users(id),
+  body         TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bid_comments_bid_id ON bid_comments (bid_id);
+
+CREATE TRIGGER trg_bid_comments_updated_at
+  BEFORE UPDATE ON bid_comments
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 -- ─────────────────────────────────────────────────────────────────
 -- 5. COMPLIANCE
 -- ─────────────────────────────────────────────────────────────────
