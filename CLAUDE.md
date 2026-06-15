@@ -9,26 +9,33 @@ BiddingBuddyBFF/
 ├── BiddingBuddyBFF.sln
 ├── CONTEXT.md                        Authoritative 43KB architecture + schema reference — READ THIS
 ├── database/
-│   └── schema.sql                    Full PostgreSQL DDL (28 tables, indexes, triggers)
+│   └── schema.sql                    Full PostgreSQL DDL — human reference (runtime uses DbMigrator)
 └── src/
     ├── BiddingBuddy.Bff.Api/         ASP.NET Core entry point
     │   ├── Program.cs                DI wiring, middleware pipeline
-    │   ├── Controllers/              14 controllers (see Endpoints section)
-    │   ├── Middleware/
-    │   │   └── OrgContextMiddleware.cs   X-Org-Id header validation + membership check
+    │   ├── Controllers/              Controllers (org-scoped + /internal/*)
+    │   ├── Filters/PipelineApiKeyAttribute.cs  X-Api-Key gate for /internal/*
+    │   ├── Middleware/OrgContextMiddleware.cs  X-Org-Id header + org-membership check
     │   └── appsettings.json
     ├── BiddingBuddy.Bff.Core/        Domain layer (no infra deps)
-    │   ├── Entities/                 28 EF Core entity classes
+    │   ├── Entities/                 EF Core entity classes
     │   ├── DTOs/                     Request/response DTOs per feature
-    │   └── Services/Repositories/   Interfaces only
+    │   ├── Options/                  Strongly-typed config (R2Options, RabbitMqOptions, …)
+    │   └── Interfaces/               Service + repository contracts only
     └── BiddingBuddy.Bff.Infrastructure/  Data + external services
-        ├── Data/
-        │   ├── BiddingBuddyDbContext.cs   EF Core DbContext (PostgreSQL/Npgsql)
-        │   └── Repositories/             IRepository implementations
+        ├── Persistence/
+        │   ├── BffDbContext.cs              EF Core DbContext (PostgreSQL/Npgsql)
+        │   ├── Configurations/              IEntityTypeConfiguration<T> per entity
+        │   └── Migrations/000N_*.sql        Embedded SQL scripts applied by DbMigrator
+        ├── Repositories/
         └── Services/
-            ├── AuthService.cs            JWT minting, refresh token rotation
-            ├── OAuthProviderService.cs   Google + GitHub OAuth 2.0 code exchange
-            └── ...                       Per-feature service implementations
+            ├── AuthService.cs               JWT minting, refresh token rotation
+            ├── OAuthProviderService.cs      Google + GitHub OAuth 2.0 code exchange
+            ├── DbMigrator.cs                Runs embedded *.sql scripts via /internal/migrations
+            ├── RabbitMqPublisher.cs         Singleton RabbitMQ producer
+            ├── NotificationPublisher.cs     Insert event/deliveries then publish trigger
+            ├── NotificationTemplateService.cs  Admin CRUD over notification_templates
+            └── ...                          Per-feature service implementations
 ```
 
 ## Architecture
@@ -39,10 +46,21 @@ bidding-buddy-ui (React SPA)
         ▼
 BiddingBuddyBFF  (this project)
    Controllers → Services (Core) → Repositories (Infrastructure) → PostgreSQL
+        │
+        │ AMQP publish (notification.{channel} queues)
+        ▼
+   RabbitMQ (13.233.138.227:5672, DLX bid.dlx)
+        │
+        │ consumed by BidProcessor's notification workers
+        ▼
+   BidProcessor (notification + enrichment workers)
         ▲
         │ POST /internal/* + X-Api-Key header
-BidProcessor pipeline (async enrichment workers)
+BidProcessor's enrichment workers → BFF
 ```
+
+BFF is both a REST surface for the SPA and a RabbitMQ producer for the notification
+subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 
 **Clean Architecture layers:**
 - **API** — Controllers, middleware (presentation only, no business logic)
@@ -64,24 +82,28 @@ BidProcessor pipeline (async enrichment workers)
 |---|---|---|
 | Auth | `/api/auth` | `GET /me`, `POST /logout` |
 | Organizations | `/api/organizations` | CRUD, member management, role assignment |
-| Tenders | `/api/tenders` | List/filter, get detail, save, track, documents, AI analysis |
-| Bids | `/api/bids` | List, create, update, stage progression (7 stages), activities, checklist |
+| Tenders | `/api/tenders` | List/filter, `GET /paged` (paginated wrapper over BiddingBuddyServices), get detail, save, track, documents, AI analysis |
+| Bids | `/api/bids` | List, create, update, stage progression (7 stages), activities, **comments**, checklist |
 | Compliance | `/api/compliance` | Requirements, documents, health score |
 | Documents | `/api/documents` | List, upload (presigned S3), download, folder management, versioning |
 | Orders | `/api/orders` | CRUD, line items, delivery milestones |
 | Payments | `/api/payments` | EMD (bid deposits), invoices, payment summary |
 | Competitors | `/api/competitors` | List, detail, market summary |
 | Analysis | `/api/analysis` | Dashboard KPIs, recommendations, performance, market trends |
-| Notifications | `/api/notifications` | List, mark read, preferences |
+| Notifications | `/api/notifications` | In-app inbox: list, mark read, channel preferences (backed by `user_notifications` since the rename — see Notification subsystem below) |
 | Integrations | `/api/integrations` | GeM portal config, sync trigger, sync status |
 
-### Internal Pipeline (API-key only — `X-Api-Key` header)
+### Internal (API-key only — `X-Api-Key` header, bypasses org middleware)
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/internal/tenders` | Upsert enriched tender from BidProcessor |
 | POST | `/internal/tenders/{gemTenderId}/documents` | Store extracted document text |
 | POST | `/internal/competitors` | Record competitor bid observation |
 | POST | `/internal/analysis` | Store AI analysis results |
+| GET  | `/internal/migrations` | List embedded migration scripts + applied status |
+| POST | `/internal/migrations` | Apply all pending migrations (idempotent — see DbMigrator below) |
+| GET/POST/PATCH/DELETE | `/internal/notification-templates[/{id}]` | Admin CRUD over `notification_templates` (global config — see Notification subsystem) |
+| POST | `/internal/notifications` | Trigger a notification dispatch from outside the BFF (BidProcessor, admin tools). In-BFF flows call `INotificationPublisher` directly. |
 
 ## Auth Design
 
@@ -126,8 +148,8 @@ Roles (stored in `organization_members.role`): `owner`, `admin`, `bid_manager`, 
 **PostgreSQL** (Npgsql + EF Core 8). No MongoDB.
 
 - **Dev connection:** `Host=13.233.138.227;Port=5432;Database=biddingbuddy;Username=postgres;Password=Fiserv@123`
-- **28 tables** — full DDL in `database/schema.sql`
-- All tables have `updated_at` trigger (auto-updated)
+- Full DDL in `database/schema.sql` (the runtime source of truth for the BFF is now `Persistence/Migrations/*.sql` applied by `DbMigrator` — see below)
+- Most tables have an `updated_at` trigger via `set_updated_at()`
 - `pgcrypto` extension for UUID generation
 
 Key table groups:
@@ -137,13 +159,21 @@ Key table groups:
 | Auth | `users`, `oauth_accounts`, `refresh_tokens` |
 | Multi-tenancy | `organizations`, `organization_members` |
 | Procurement | `tenders`, `saved_tenders`, `tender_documents`, `tender_analysis` |
-| Bids | `bids`, `bid_activities`, `bid_checklists` |
+| Bids | `bids`, `bid_activities`, `bid_checklists`, `bid_comments` |
 | Compliance | `compliance_requirements`, `compliance_documents` |
 | Documents | `documents`, `document_versions`, `document_folders` |
 | Fulfillment | `orders`, `order_items`, `order_milestones` |
 | Finance | `emd_deposits`, `invoices` |
 | Intelligence | `competitors`, `competitor_observations` |
-| Platform | `notifications`, `gem_integrations`, `analysis_results` |
+| Platform | `user_notifications`, `gem_integrations`, `analysis_results` |
+| Notification dispatch | `notifications`, `notification_deliveries`, `notification_templates`, `notification_logs` |
+| Schema | `schema_migrations` (DbMigrator state) |
+
+**Naming-rename note:** what used to be `notifications` (the in-app inbox the
+React SPA reads) is now `user_notifications`. The `notifications` name was reclaimed
+by the notification dispatch subsystem (handoff with the BidProcessor team) as the
+logical event row. Existing controller URL `/api/notifications` is unchanged — only
+the backing table + entity (`UserNotification`) were renamed.
 
 ## Configuration
 
@@ -162,7 +192,14 @@ Key table groups:
     "GitHub": { "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/github/callback" }
   },
   "Frontend": { "BaseUrl": "http://localhost:3000", "AuthCallbackPath": "/auth/callback" },
-  "Pipeline": { "ApiKey": "pipeline_internal_secret_CHANGE_ME" }
+  "Pipeline": { "ApiKey": "pipeline_internal_secret_CHANGE_ME" },
+  "RabbitMq": {
+    "HostName": "13.233.138.227", "Port": 5672,
+    "Username": "...", "Password": "...",
+    "VirtualHost": "/", "DeadLetterExchange": "bid.dlx",
+    "ClientName": "BiddingBuddyBFF"
+  },
+  "BiddingBuddyServices": { "BaseUrl": "http://localhost:5273", "Username": "admin", "Password": "admin123" }
 }
 ```
 
@@ -172,10 +209,13 @@ Key table groups:
 |---|---|---|
 | Microsoft.AspNetCore.Authentication.JwtBearer | 8.0.11 | JWT middleware |
 | Npgsql.EntityFrameworkCore.PostgreSQL | 8.0.11 | PostgreSQL ORM |
-| Microsoft.EntityFrameworkCore.Design | 8.0.11 | EF migrations tooling |
+| Microsoft.EntityFrameworkCore.Design | 8.0.11 | EF Core tooling (not used for migrations — see DbMigrator) |
 | System.IdentityModel.Tokens.Jwt | 7.6.3 | JWT parsing/validation |
-| Microsoft.Extensions.Http | 8.0.1 | HttpClientFactory (OAuth calls) |
+| Microsoft.Extensions.Http | 8.0.1 | HttpClientFactory (OAuth + BiddingBuddyServices) |
 | Swashbuckle.AspNetCore | 6.6.2 | Swagger UI |
+| AWSSDK.S3 | 3.7.413.3 | Cloudflare R2 (S3-compatible) presign |
+| RabbitMQ.Client | 6.8.1 | RabbitMQ producer for notification subsystem |
+| BCrypt.Net-Next | 4.0.3 | Local password hashing (if/when used) |
 
 ## Running
 
@@ -185,11 +225,45 @@ dotnet run
 # Listens on https://localhost:7100
 ```
 
-EF Migrations:
-```bash
-dotnet ef migrations add <Name> --project ../BiddingBuddy.Bff.Infrastructure
-dotnet ef database update
+### Schema migrations (DbMigrator — NOT EF migrations)
+
+This project does **not** use EF Core migrations. Schema changes ship as raw SQL
+scripts embedded in the Infrastructure assembly and are applied on demand via
+`POST /internal/migrations`.
+
 ```
+Persistence/Migrations/
+├── 0001_add_bid_comments.sql     ← applied in filename order
+├── 0002_add_notifications.sql    ← next one
+└── ...
+```
+
+How it works:
+- Scripts are marked `<EmbeddedResource>` in `BiddingBuddy.Bff.Infrastructure.csproj`,
+  so they travel inside the DLL — no extra deploy artefacts.
+- `DbMigrator` (`Services/DbMigrator.cs`) ensures a `schema_migrations` table,
+  reads applied names, then runs each missing script in ascending filename order.
+- Each script + its tracking insert run in **one transaction**. A failure rolls
+  back fully and is not recorded → retried next call. The endpoint returns 500
+  with the underlying Postgres error so failures surface immediately.
+- Scripts must be **idempotent** (use `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`,
+  `DO $$ ... IF NOT EXISTS ...` for triggers). The transaction + tracking row is
+  belt-and-suspenders so you can't double-apply.
+
+Endpoints (both `[PipelineApiKey]`):
+```
+GET  /internal/migrations    → [{ name, applied, appliedAt }]
+POST /internal/migrations    → { applied: [...], alreadyApplied: [...], totalScripts }
+```
+
+Adding a new migration:
+1. Drop `000N_short_name.sql` into `src/BiddingBuddy.Bff.Infrastructure/Persistence/Migrations/`.
+2. Rebuild + restart the BFF.
+3. `curl -X POST http://localhost:5124/internal/migrations -H "X-Api-Key: <Pipeline:ApiKey>"`.
+
+`database/schema.sql` is the human-readable reference. Keep it in sync with the
+migrations folder when you add/change tables — but the runtime applies the
+migrations, not `schema.sql`.
 
 ## How BidProcessor Connects
 
@@ -291,6 +365,120 @@ Local dev: `dotnet user-secrets set "R2:AccessKeyId" "..." --project src/Bidding
 - `mimeType` on the server allowlist (PDF, common images, Office formats)
 - `fileSizeKb` between 1 and `R2:MaxUploadSizeKb`
 - Object key always server-generated: `orgs/{orgId}/docs/{Guid}/{sanitizedFileName}`
+
+## Notification subsystem
+
+The BFF is the **publisher** for a fan-out notification pipeline. The BidProcessor
+team's notification workers are the **consumers** (rendering + sending + retries
++ audit log). They've shipped + their tests are green; BFF inserts rows and
+publishes thin RabbitMQ triggers.
+
+### Tables
+
+| Table | Owner | Purpose |
+|---|---|---|
+| `notification_templates` | BFF | Handlebars templates, one row per (code, channel). Admin CRUD via `/internal/notification-templates`. |
+| `notifications` | BFF inserts only | One logical event per call (category + template_code + payload + correlation_id). |
+| `notification_deliveries` | BFF inserts only — processor owns every column after insert | One per channel for a notification. BFF sets `status='Pending'`, `max_retries` per category. |
+| `notification_logs` | Processor-owned | One row per send attempt (audit). BFF read-only. |
+| `user_notifications` | BFF | The in-app inbox the SPA reads. The processor's InApp handler inserts here when channel=InApp. |
+
+### Publisher flow (`INotificationPublisher.SendAsync`)
+
+```
+1. DB transaction
+     INSERT INTO notifications (category, template_code, user_id, payload, correlation_id)
+     INSERT INTO notification_deliveries  (one row per recipient, status=Pending, max_retries=per-category)
+   commit
+
+2. For each delivery, publish to RabbitMQ
+     queue:  notification.{email|sms|whatsapp|firebase|inapp}
+     body:   { deliveryId, channel, correlationId }   ← thin trigger, no content
+     props:  Persistent + ContentType=application/json + AMQP CorrelationId
+```
+
+Critical rules baked into the publisher:
+- **No content/recipient/template data in the RabbitMQ message.** Just the ids.
+- **`max_retries` per category:** Transactional=5, Information=3, Marketing=1.
+- **`recipient_address` format per channel:** Email → `user@example.com`; Sms/WhatsApp → E.164 `+9198…`; Firebase → FCM token; InApp → user-id string.
+- **Same `correlation_id` across all deliveries of one notification** → forwarded into every RabbitMQ message so the processor's Serilog enricher threads logs end-to-end.
+- **BFF never touches `notification_deliveries.{status, retry_count, next_retry_at, locked_*, processed_at, failed_at, last_error, version}` or `notification_logs` after insert** — every state column is processor-owned.
+- If RabbitMQ publish fails, the Pending row stays Pending; the processor's
+  pending-grace poller (60s) picks it up. Self-healing — no outbox table needed.
+
+### RabbitMQ queues
+
+`notification.email`, `notification.sms`, `notification.whatsapp`, `notification.firebase`, `notification.inapp` —
+declared durable on first publish with `x-dead-letter-exchange=bid.dlx` (shared
+with the rest of the BidProcessor pipeline).
+
+### Templates (Handlebars)
+
+- Engine: **Handlebars.Net** in the processor — syntax is `{{FirstName}}`, not Razor `@Model.X`.
+- `subject` and `body` are both Handlebars. String values inside the `metadata` JSONB are also rendered (useful for InApp `actionUrl`, Firebase FCM data payload).
+- Model = whatever the publisher puts in `notifications.payload`. Keys are case-sensitive.
+- Cache invalidation on the processor side is automatic via `updated_at`.
+
+Seeded by migration `0002`: `WELCOME` (Email+InApp), `TEAM_INVITATION` (Email+InApp), `PASSWORD_RESET` (Email), `EMAIL_VERIFICATION` (Email). Edit via `/internal/notification-templates` or add new ones in a future migration.
+
+### Calling the publisher from a service
+
+```csharp
+public class AuthService(INotificationPublisher publisher, ...)
+{
+    public async Task HandleOAuthCallbackAsync(...)
+    {
+        ...
+        await publisher.SendAsync(new SendNotificationDto(
+            Category:     NotificationCategory.Transactional,    // 5 retries
+            TemplateCode: "WELCOME",
+            UserId:       user.Id,
+            Payload:      new Dictionary<string, object>
+            {
+                ["FirstName"]        = user.Name,
+                ["OrganizationName"] = org.Name,
+            },
+            Recipients: new[]
+            {
+                new NotificationRecipientDto(NotificationChannel.Email, user.Email),
+                new NotificationRecipientDto(NotificationChannel.InApp, user.Id.ToString()),
+            }), ct);
+    }
+}
+```
+
+**Wired triggers (in-BFF):**
+| Event | Service | Template | Channels |
+|---|---|---|---|
+| Password-based signup (`POST /api/auth/register`) | `AuthService.RegisterAsync` | `WELCOME` | Email + InApp |
+| First-time OAuth signup | `AuthService.HandleOAuthCallbackAsync` (only when `isNewUser`) | `WELCOME` | Email + InApp |
+| Org member invite | `OrganizationService.InviteMemberAsync` | `TEAM_INVITATION` | Email + InApp |
+
+Each call is wrapped in a try/catch with `ILogger.LogWarning` — notification
+failures NEVER fail the parent flow (the user was created / the membership was
+persisted regardless). RabbitMQ hiccups self-heal via the processor's
+pending-grace poller.
+
+**External triggers:** `POST /internal/notifications` (API-key) for sources outside
+the BFF (BidProcessor, admin tools).
+
+### Config
+
+```json
+"RabbitMq": {
+  "HostName":           "13.233.138.227",
+  "Port":               5672,
+  "Username":           "<set in secrets>",
+  "Password":           "<set in secrets>",
+  "VirtualHost":        "/",
+  "DeadLetterExchange": "bid.dlx",
+  "ClientName":         "BiddingBuddyBFF"
+}
+```
+
+`RabbitMqPublisher` is a singleton holding one `IConnection`; it opens a fresh
+channel per publish (cheap), declares the target queue idempotently, and sends
+persistent JSON.
 
 ## Key Reference
 

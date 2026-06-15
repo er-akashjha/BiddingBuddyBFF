@@ -62,6 +62,31 @@ public class BidChecklistItemConfiguration : IEntityTypeConfiguration<BidCheckli
     }
 }
 
+public class OrganizationInviteConfiguration : IEntityTypeConfiguration<OrganizationInvite>
+{
+    public void Configure(EntityTypeBuilder<OrganizationInvite> b)
+    {
+        b.ToTable("organization_invites");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.OrgId).HasColumnName("org_id");
+        b.Property(x => x.Email).HasColumnName("email").IsRequired();
+        b.Property(x => x.Role).HasColumnName("role").IsRequired();
+        b.Property(x => x.Department).HasColumnName("department");
+        b.Property(x => x.InvitedBy).HasColumnName("invited_by");
+        b.Property(x => x.TokenHash).HasColumnName("token_hash").IsRequired();
+        b.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+        b.Property(x => x.AcceptedAt).HasColumnName("accepted_at");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasIndex(x => x.TokenHash).IsUnique();
+        // Partial unique index "one pending invite per (org, email)" lives in the
+        // SQL migration — EF Core can't model a partial index in the fluent API.
+        b.HasIndex(x => new { x.OrgId, x.Email });
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
+        b.HasOne(x => x.Inviter).WithMany().HasForeignKey(x => x.InvitedBy);
+    }
+}
+
 public class BidCommentConfiguration : IEntityTypeConfiguration<BidComment>
 {
     public void Configure(EntityTypeBuilder<BidComment> b)
@@ -341,11 +366,13 @@ public class AiAnalysisResultConfiguration : IEntityTypeConfiguration<AiAnalysis
     }
 }
 
-public class NotificationConfiguration : IEntityTypeConfiguration<Notification>
+// In-app notification inbox (was "Notification"). Renamed to UserNotification
+// after the notification subsystem took the "notifications" table for dispatch events.
+public class UserNotificationConfiguration : IEntityTypeConfiguration<UserNotification>
 {
-    public void Configure(EntityTypeBuilder<Notification> b)
+    public void Configure(EntityTypeBuilder<UserNotification> b)
     {
-        b.ToTable("notifications");
+        b.ToTable("user_notifications");
         b.HasKey(x => x.Id);
         b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
         b.Property(x => x.OrgId).HasColumnName("org_id");
@@ -359,6 +386,97 @@ public class NotificationConfiguration : IEntityTypeConfiguration<Notification>
         b.Property(x => x.ReadAt).HasColumnName("read_at");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => new { x.UserId, x.IsRead });
+    }
+}
+
+// ── Notification subsystem (dispatch event + per-channel deliveries + audit log) ─
+
+public class NotificationConfiguration : IEntityTypeConfiguration<Notification>
+{
+    public void Configure(EntityTypeBuilder<Notification> b)
+    {
+        b.ToTable("notifications");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.Category).HasColumnName("category").IsRequired().HasMaxLength(20);
+        b.Property(x => x.TemplateCode).HasColumnName("template_code").IsRequired().HasMaxLength(100);
+        b.Property(x => x.UserId).HasColumnName("user_id");
+        b.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb").HasDefaultValueSql("'{}'::jsonb");
+        b.Property(x => x.CorrelationId).HasColumnName("correlation_id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasMany(x => x.Deliveries).WithOne(x => x.Notification).HasForeignKey(x => x.NotificationId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class NotificationDeliveryConfiguration : IEntityTypeConfiguration<NotificationDelivery>
+{
+    public void Configure(EntityTypeBuilder<NotificationDelivery> b)
+    {
+        b.ToTable("notification_deliveries");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.NotificationId).HasColumnName("notification_id");
+        b.Property(x => x.Channel).HasColumnName("channel").IsRequired().HasMaxLength(20);
+        b.Property(x => x.RecipientAddress).HasColumnName("recipient_address").IsRequired().HasMaxLength(500);
+        b.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(20).HasDefaultValue("Pending");
+        b.Property(x => x.RetryCount).HasColumnName("retry_count").HasDefaultValue(0);
+        b.Property(x => x.MaxRetries).HasColumnName("max_retries").HasDefaultValue(5);
+        b.Property(x => x.NextRetryAt).HasColumnName("next_retry_at");
+        b.Property(x => x.LockedAt).HasColumnName("locked_at");
+        b.Property(x => x.LockedBy).HasColumnName("locked_by").HasMaxLength(100);
+        b.Property(x => x.LastError).HasColumnName("last_error");
+        b.Property(x => x.Version).HasColumnName("version").HasDefaultValue(0);
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.ProcessedAt).HasColumnName("processed_at");
+        b.Property(x => x.FailedAt).HasColumnName("failed_at");
+        b.HasIndex(x => new { x.NotificationId, x.Channel }).IsUnique();
+        b.HasIndex(x => x.NotificationId);
+    }
+}
+
+public class NotificationTemplateConfiguration : IEntityTypeConfiguration<NotificationTemplate>
+{
+    public void Configure(EntityTypeBuilder<NotificationTemplate> b)
+    {
+        b.ToTable("notification_templates");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.Code).HasColumnName("code").IsRequired().HasMaxLength(100);
+        b.Property(x => x.Channel).HasColumnName("channel").IsRequired().HasMaxLength(20);
+        b.Property(x => x.Name).HasColumnName("name").IsRequired().HasMaxLength(200);
+        b.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(500);
+        b.Property(x => x.Body).HasColumnName("body").IsRequired();
+        b.Property(x => x.BodyFormat).HasColumnName("body_format").IsRequired().HasMaxLength(20).HasDefaultValue("Html");
+        b.Property(x => x.Metadata).HasColumnName("metadata").HasColumnType("jsonb").HasDefaultValueSql("'{}'::jsonb");
+        b.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        b.HasIndex(x => new { x.Code, x.Channel }).IsUnique();
+    }
+}
+
+public class NotificationLogConfiguration : IEntityTypeConfiguration<NotificationLog>
+{
+    public void Configure(EntityTypeBuilder<NotificationLog> b)
+    {
+        // Read-only from BFF's perspective; map for completeness so admin queries can read it.
+        b.ToTable("notification_logs");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.DeliveryId).HasColumnName("delivery_id");
+        b.Property(x => x.NotificationId).HasColumnName("notification_id");
+        b.Property(x => x.Channel).HasColumnName("channel").IsRequired().HasMaxLength(20);
+        b.Property(x => x.Provider).HasColumnName("provider").HasMaxLength(100);
+        b.Property(x => x.RecipientAddress).HasColumnName("recipient_address").HasMaxLength(500);
+        b.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(500);
+        b.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(20);
+        b.Property(x => x.ProviderMessageId).HasColumnName("provider_message_id").HasMaxLength(255);
+        b.Property(x => x.AttemptNumber).HasColumnName("attempt_number");
+        b.Property(x => x.ErrorMessage).HasColumnName("error_message");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.CompletedAt).HasColumnName("completed_at");
+        b.HasIndex(x => x.DeliveryId);
+        b.HasIndex(x => x.NotificationId);
     }
 }
 

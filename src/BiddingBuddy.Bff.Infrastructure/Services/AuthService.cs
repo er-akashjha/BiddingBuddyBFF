@@ -2,8 +2,12 @@ using System.Security.Cryptography;
 using System.Text;
 using BCrypt.Net;
 using BiddingBuddy.Bff.Core.DTOs.Auth;
+using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
+using BiddingBuddy.Bff.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
@@ -13,7 +17,10 @@ public class AuthService(
     IRefreshTokenRepository refreshRepo,
     IOrganizationRepository orgRepo,
     IOAuthProviderService oauthProvider,
-    TokenService tokenService) : IAuthService
+    TokenService tokenService,
+    INotificationPublisher notifications,
+    BffDbContext db,
+    ILogger<AuthService> log) : IAuthService
 {
     public async Task<TokenResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
     {
@@ -22,6 +29,17 @@ public class AuthService(
 
         if (await userRepo.FindByEmailAsync(dto.Email, ct) is not null)
             throw new InvalidOperationException("EMAIL_EXISTS");
+
+        // If an invite token is supplied, the new user JOINS the inviting org
+        // (with the role recorded on the invite) and we DO NOT auto-create a
+        // personal org. The token must hash to a pending, unexpired invite whose
+        // email matches the registration email — we don't want a leaked token to
+        // grant access to a different email.
+        OrganizationInvite? invite = null;
+        if (!string.IsNullOrWhiteSpace(dto.InviteToken))
+        {
+            invite = await ValidateInviteAsync(dto.InviteToken!, dto.Email, ct);
+        }
 
         var user = await userRepo.CreateAsync(new User
         {
@@ -34,26 +52,79 @@ public class AuthService(
             UpdatedAt = DateTime.UtcNow,
         }, ct);
 
-        var org = await orgRepo.CreateAsync(new Organization
+        string orgNameForWelcome;
+        if (invite is not null)
         {
-            OwnedBy = user.Id,
-            Name = dto.OrgName,
-            IsActive = true,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        }, ct);
+            // Join the inviting org with the invite's role; skip personal-org creation.
+            await orgRepo.AddMemberAsync(new OrgMember
+            {
+                OrgId      = invite.OrgId,
+                UserId     = user.Id,
+                Role       = invite.Role,
+                Department = invite.Department,
+                Status     = "active",
+                InvitedBy  = invite.InvitedBy,
+                JoinedAt   = DateTime.UtcNow,
+                CreatedAt  = DateTime.UtcNow,
+            }, ct);
 
-        await orgRepo.AddMemberAsync(new OrgMember
+            invite.AcceptedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+
+            orgNameForWelcome = await db.Organizations
+                .Where(o => o.Id == invite.OrgId)
+                .Select(o => o.Name)
+                .FirstOrDefaultAsync(ct) ?? string.Empty;
+        }
+        else
         {
-            OrgId = org.Id,
-            UserId = user.Id,
-            Role = "owner",
-            Status = "active",
-            JoinedAt = DateTime.UtcNow,
-            CreatedAt = DateTime.UtcNow,
-        }, ct);
+            var org = await orgRepo.CreateAsync(new Organization
+            {
+                OwnedBy = user.Id,
+                Name = dto.OrgName,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            }, ct);
 
-        return await IssueTokensAsync(user, ct);
+            await orgRepo.AddMemberAsync(new OrgMember
+            {
+                OrgId = org.Id,
+                UserId = user.Id,
+                Role = "owner",
+                Status = "active",
+                JoinedAt = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow,
+            }, ct);
+
+            orgNameForWelcome = org.Name;
+        }
+
+        var tokens = await IssueTokensAsync(user, ct);
+        await SendWelcomeAsync(user, orgNameForWelcome, ct);
+        return tokens;
+    }
+
+    /// <summary>
+    /// Resolves a raw invite token to a usable invite row, or throws
+    /// <see cref="ArgumentException"/> with a non-revealing message on any failure
+    /// (unknown token / expired / already accepted / email mismatch).
+    /// </summary>
+    private async Task<OrganizationInvite> ValidateInviteAsync(string rawToken, string email, CancellationToken ct)
+    {
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(rawToken));
+        var hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
+
+        var invite = await db.OrganizationInvites.FirstOrDefaultAsync(i => i.TokenHash == hash, ct);
+
+        if (invite is null
+            || invite.AcceptedAt is not null
+            || invite.ExpiresAt < DateTime.UtcNow
+            || !string.Equals(invite.Email, email.Trim().ToLowerInvariant(), StringComparison.Ordinal))
+        {
+            throw new ArgumentException("INVITE_INVALID");
+        }
+        return invite;
     }
 
     public async Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default)
@@ -78,6 +149,7 @@ public class AuthService(
         var oauthAccount = await oauthRepo.FindAsync(provider, info.ProviderUserId, ct);
 
         User user;
+        var isNewUser = false;
         if (oauthAccount is not null)
         {
             // Known provider identity — load user, update tokens
@@ -89,9 +161,11 @@ public class AuthService(
         }
         else
         {
-            // New provider identity — look up by email or create user
-            user = await userRepo.FindByEmailAsync(info.Email, ct)
-                ?? await userRepo.CreateAsync(new User
+            // New provider identity — look up by email; create user if first time on this system
+            var existing = await userRepo.FindByEmailAsync(info.Email, ct);
+            if (existing is null)
+            {
+                user = await userRepo.CreateAsync(new User
                 {
                     Email = info.Email,
                     Name = info.Name,
@@ -99,6 +173,12 @@ public class AuthService(
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
                 }, ct);
+                isNewUser = true;
+            }
+            else
+            {
+                user = existing;
+            }
 
             // Link this provider to the user
             await oauthRepo.CreateAsync(new OAuthAccount
@@ -121,7 +201,14 @@ public class AuthService(
             user.AvatarUrl = info.AvatarUrl;
         await userRepo.UpdateAsync(user, ct);
 
-        return await IssueTokensAsync(user, ct);
+        var tokens = await IssueTokensAsync(user, ct);
+
+        // First-time OAuth signup → fire WELCOME. The user has no org yet (orgs are
+        // created/joined later), so OrganizationName is left blank in the payload.
+        if (isNewUser)
+            await SendWelcomeAsync(user, organizationName: null, ct);
+
+        return tokens;
     }
 
     public async Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default)
@@ -217,5 +304,43 @@ public class AuthService(
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Fire-and-forget WELCOME notification on first signup. Notification failures
+    /// must not break the signup response — the user is already created and tokens
+    /// are already minted by the time we're called. We log and move on; the
+    /// processor's pending-grace poller handles any RabbitMQ hiccup.
+    /// </summary>
+    private async Task SendWelcomeAsync(User user, string? organizationName, CancellationToken ct)
+    {
+        try
+        {
+            await notifications.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "WELCOME",
+                UserId:       user.Id,
+                Payload:      new Dictionary<string, object>
+                {
+                    ["FirstName"]        = FirstName(user.Name),
+                    ["OrganizationName"] = organizationName ?? string.Empty,
+                },
+                Recipients: new[]
+                {
+                    new NotificationRecipientDto(NotificationChannel.Email, user.Email),
+                    new NotificationRecipientDto(NotificationChannel.InApp, user.Id.ToString()),
+                }), ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "WELCOME notification failed for user {UserId}; signup itself succeeded.", user.Id);
+        }
+    }
+
+    private static string FirstName(string? fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return string.Empty;
+        var space = fullName.IndexOf(' ');
+        return space < 0 ? fullName.Trim() : fullName[..space].Trim();
     }
 }

@@ -7,12 +7,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
+/// <summary>
+/// In-app notification inbox service (what /api/notifications drives).
+/// Operates on <see cref="UserNotification"/> (table <c>user_notifications</c>).
+/// </summary>
 public class NotificationService(BffDbContext db) : INotificationService
 {
-    public async Task<PagedResult<NotificationDto>> ListAsync(
+    public async Task<PagedResult<UserNotificationDto>> ListAsync(
         Guid orgId, Guid userId, bool unreadOnly, int page, int pageSize, CancellationToken ct = default)
     {
-        var query = db.Notifications.Where(n => n.OrgId == orgId && n.UserId == userId);
+        var query = db.UserNotifications.Where(n => n.OrgId == orgId && n.UserId == userId);
         if (unreadOnly) query = query.Where(n => !n.IsRead);
 
         var total = await query.CountAsync(ct);
@@ -22,18 +26,18 @@ public class NotificationService(BffDbContext db) : INotificationService
         var items = await query
             .OrderByDescending(n => n.CreatedAt)
             .Skip((pg - 1) * sz).Take(sz)
-            .Select(n => new NotificationDto(
+            .Select(n => new UserNotificationDto(
                 n.Id, n.Type, n.Title, n.Body,
                 n.EntityType, n.EntityId,
                 n.IsRead, n.ReadAt, n.CreatedAt))
             .ToListAsync(ct);
 
-        return new PagedResult<NotificationDto>(items, total, pg, sz);
+        return new PagedResult<UserNotificationDto>(items, total, pg, sz);
     }
 
     public async Task MarkReadAsync(Guid notificationId, Guid userId, CancellationToken ct = default)
     {
-        var notification = await db.Notifications
+        var notification = await db.UserNotifications
             .FirstOrDefaultAsync(n => n.Id == notificationId && n.UserId == userId, ct)
             ?? throw new KeyNotFoundException("Notification not found.");
 
@@ -47,7 +51,7 @@ public class NotificationService(BffDbContext db) : INotificationService
 
     public async Task MarkAllReadAsync(Guid orgId, Guid userId, CancellationToken ct = default)
     {
-        var unread = await db.Notifications
+        var unread = await db.UserNotifications
             .Where(n => n.OrgId == orgId && n.UserId == userId && !n.IsRead)
             .ToListAsync(ct);
 

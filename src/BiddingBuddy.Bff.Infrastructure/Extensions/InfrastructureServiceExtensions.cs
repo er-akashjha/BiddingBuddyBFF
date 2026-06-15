@@ -75,6 +75,12 @@ public static class InfrastructureServiceExtensions
         // Schema migrator (runs embedded SQL scripts via /internal/migrations)
         services.AddScoped<IDbMigrator, DbMigrator>();
 
+        // ── Notification subsystem ───────────────────────────────────────────
+        services.Configure<RabbitMqOptions>(config.GetSection(RabbitMqOptions.Section));
+        services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
+        services.AddScoped<INotificationPublisher, NotificationPublisher>();
+        services.AddScoped<INotificationTemplateService, NotificationTemplateService>();
+
         return services;
     }
 }

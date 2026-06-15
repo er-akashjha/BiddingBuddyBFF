@@ -61,15 +61,44 @@ public class OrganizationsController(IOrganizationService orgService) : BffContr
         return Ok(members);
     }
 
-    /// <summary>Invite a user to the organization by email (owner or admin only).</summary>
+    /// <summary>
+    /// Invite a user to the organization by email (owner or admin only).
+    /// If the email belongs to an existing user, they're added immediately
+    /// (response <c>status="added"</c>, populated <c>member</c>). Otherwise a
+    /// pending invite is created and an email with a registration link is sent
+    /// (response <c>status="invited"</c>, populated <c>invitedEmail</c> + <c>expiresAt</c>).
+    /// </summary>
     [HttpPost("{id:guid}/members")]
-    [ProducesResponseType(typeof(OrgMemberDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(InviteMemberResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> InviteMember(Guid id, [FromBody] InviteMemberDto dto, CancellationToken ct)
     {
-        var member = await orgService.InviteMemberAsync(id, CurrentUserId, dto, ct);
-        return Ok(member);
+        var result = await orgService.InviteMemberAsync(id, CurrentUserId, dto, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// List pending invites for the org (rows where the invitee has not yet
+    /// registered). Used by the SPA's Teams page to show "Pending" rows next
+    /// to active members.
+    /// </summary>
+    [HttpGet("{id:guid}/invites")]
+    [ProducesResponseType(typeof(IReadOnlyList<PendingInviteDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetPendingInvites(Guid id, CancellationToken ct)
+    {
+        var invites = await orgService.GetPendingInvitesAsync(id, ct);
+        return Ok(invites);
+    }
+
+    /// <summary>Revoke a pending invite (the token can no longer be redeemed). Owner/admin only.</summary>
+    [HttpDelete("{id:guid}/invites/{inviteId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RevokePendingInvite(Guid id, Guid inviteId, CancellationToken ct)
+    {
+        await orgService.RevokePendingInviteAsync(id, inviteId, CurrentUserId, ct);
+        return NoContent();
     }
 
     /// <summary>Update a member's role or department (owner or admin only).</summary>

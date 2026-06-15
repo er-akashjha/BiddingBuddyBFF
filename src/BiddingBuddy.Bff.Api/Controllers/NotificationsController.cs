@@ -14,7 +14,7 @@ public class NotificationsController(INotificationService notificationService) :
 {
     /// <summary>Paginated notification list for the current user in the org.</summary>
     [HttpGet]
-    [ProducesResponseType(typeof(PagedResult<NotificationDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PagedResult<UserNotificationDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         [FromQuery] bool unreadOnly = false,
         [FromQuery] int page = 1,
