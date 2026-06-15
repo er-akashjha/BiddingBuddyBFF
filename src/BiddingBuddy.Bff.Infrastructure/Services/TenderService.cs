@@ -169,7 +169,21 @@ public class TenderService(BffDbContext db) : ITenderService
             t.AiAnalysis.EligibilityBreakdown, t.AiAnalysis.RiskFactors,
             t.AiAnalysis.WinStrategy, t.AiAnalysis.SuggestedBidRange,
             t.AiAnalysis.RequiredDocuments, t.AiAnalysis.KeyClauses,
-            t.AiAnalysis.GeneratedAt));
+            t.AiAnalysis.GeneratedAt),
+        // Structured procurement detail only exists on the Mongo-sourced path
+        // (BiddingBuddyServices). The Postgres entity doesn't carry it.
+        Financial:        null,
+        Qualification:    null,
+        Commercial:       null,
+        Compliance:       null,
+        Items:            Array.Empty<TenderItemDto>(),
+        Ministry:         null,
+        Department:       null,
+        Office:           null,
+        BuyerName:        null,
+        BuyerDesignation: null,
+        SourceDocuments:  Array.Empty<TenderSourceDocumentDto>(),
+        Timeline:         null);
 
     private static OrgTenderSettingsDto MapSettings(OrgTenderSettings s)
         => new(s.IsTracked, s.IsSaved, s.CustomScore, s.Notes, s.Tags);

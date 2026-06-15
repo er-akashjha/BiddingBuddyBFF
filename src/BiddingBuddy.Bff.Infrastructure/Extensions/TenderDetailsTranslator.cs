@@ -44,7 +44,27 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                 UpdatedAt:        tender.UpdatedAt,
                 Documents:        Array.Empty<TenderDocumentDto>(),
                 OrgSettings:      null,
-                AiAnalysis:       null);
+                AiAnalysis:       null,
+                // Pass the rich procurement detail straight through to the client
+                Financial:        tender.Financial,
+                Qualification:    tender.Qualification,
+                Commercial:       tender.Commercial,
+                Compliance:       tender.Compliance,
+                Items:            tender.Items ?? Array.Empty<TenderItemDto>(),
+                Ministry:         tender.Organization?.Ministry,
+                Department:       tender.Organization?.Department,
+                Office:           tender.Organization?.Office,
+                BuyerName:        tender.Organization?.BuyerName,
+                BuyerDesignation: tender.Organization?.BuyerDesignation,
+                SourceDocuments:  (tender.Documents ?? new List<TenderDocumentRefDto>())
+                    .Where(d => !string.IsNullOrWhiteSpace(d.DocumentId))
+                    .Select(d => new TenderSourceDocumentDto(
+                        DocumentId:   d.DocumentId!,
+                        Type:         d.Type,
+                        FileName:     d.FileName,
+                        HasStoredKey: !string.IsNullOrWhiteSpace(d.S3Key)))
+                    .ToList(),
+                Timeline:         tender.Timeline);
         }
 
 
