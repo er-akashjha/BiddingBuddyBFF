@@ -11,7 +11,8 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Produces("application/json")]
 public class TendersController(
     ITenderService tenderService,
-    IBiddingBuddyServicesClient servicesClient) : BffControllerBase
+    IBiddingBuddyServicesClient servicesClient,
+    ITenderFileStorage tenderFileStorage) : BffControllerBase
 {
     /// <summary>Tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
     [HttpGet]
@@ -44,6 +45,40 @@ public class TendersController(
     {
         var tender = await servicesClient.GetTenderAsync(id.ToString(), ct);
         return Ok(tender);
+    }
+
+    /// <summary>
+    /// Generate a short-lived presigned URL for a scraped tender document (PDF) in S3.
+    /// The bytes never flow through the BFF. Uses the document's stored s3Key when
+    /// present, otherwise reconstructs it from the platform tender id + document id
+    /// (for tenders enriched before s3Key was persisted).
+    /// Pass <c>inline=true</c> to open in-browser (view); default is an attachment (download).
+    /// </summary>
+    [HttpGet("{id:guid}/documents/{documentId}/download-url")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> GetDocumentDownloadUrl(
+        Guid id, string documentId, CancellationToken ct, [FromQuery] bool inline = false)
+    {
+        var tender = await servicesClient.GetRawTenderAsync(id.ToString(), ct);
+        if (tender is null) return NotFound();
+
+        var doc = tender.Documents?.FirstOrDefault(d => d.DocumentId == documentId);
+        if (doc is null) return NotFound();
+
+        var bucket = !string.IsNullOrWhiteSpace(doc.S3Bucket)
+            ? doc.S3Bucket!
+            : tenderFileStorage.DefaultBucket;
+
+        var key = !string.IsNullOrWhiteSpace(doc.S3Key)
+            ? doc.S3Key!
+            : tenderFileStorage.ReconstructKey(tender.Source?.PlatformTenderId ?? string.Empty, documentId);
+
+        var fileName = !string.IsNullOrWhiteSpace(doc.FileName) ? doc.FileName! : $"{documentId}.pdf";
+
+        var presigned = await tenderFileStorage.CreatePresignedGetAsync(bucket, key, fileName, inline: inline, ct);
+        return Ok(new { url = presigned.Url, expiresAt = presigned.ExpiresAt });
     }
 
     /// <summary>Save a tender to the org with optional notes, tags and custom score.</summary>

@@ -43,6 +43,28 @@ public static class InfrastructureServiceExtensions
 
         services.AddScoped<IR2Storage, R2Storage>();
 
+        // ── AWS S3 — scraped tender files (separate bucket + credentials from R2) ──
+        services.Configure<TenderS3Options>(config.GetSection(TenderS3Options.Section));
+
+        services.AddKeyedSingleton<IAmazonS3>("TenderS3", (sp, _) =>
+        {
+            var cfg = config.GetSection(TenderS3Options.Section).Get<TenderS3Options>()
+                ?? throw new InvalidOperationException("TenderS3 configuration section is missing.");
+
+            var s3Config = new AmazonS3Config
+            {
+                RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(cfg.Region),
+            };
+
+            // Fall back to the default AWS credential chain (env / instance role) when
+            // explicit keys aren't configured — handy on EC2 with an instance profile.
+            return string.IsNullOrWhiteSpace(cfg.AccessKeyId)
+                ? new AmazonS3Client(s3Config)
+                : new AmazonS3Client(new BasicAWSCredentials(cfg.AccessKeyId, cfg.SecretAccessKey), s3Config);
+        });
+
+        services.AddScoped<ITenderFileStorage, TenderFileStorage>();
+
         // Typed HTTP client — BiddingBuddyServices (MongoDB internal API, Basic auth)
         services.AddHttpClient<IBiddingBuddyServicesClient, BiddingBuddyServicesClient>();
 

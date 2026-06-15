@@ -46,7 +46,37 @@ public record TenderDetailDto(
     DateTime UpdatedAt,
     IReadOnlyList<TenderDocumentDto> Documents,
     OrgTenderSettingsDto? OrgSettings,
-    AiAnalysisResultDto? AiAnalysis
+    AiAnalysisResultDto? AiAnalysis,
+    // ── Structured procurement detail, passed through from BiddingBuddyServices (Mongo) ──
+    TenderFinancialDto? Financial,
+    TenderQualificationDto? Qualification,
+    TenderCommercialDto? Commercial,
+    TenderComplianceDto? Compliance,
+    IReadOnlyList<TenderItemDto> Items,
+    // ── Buyer / organization detail ──
+    string? Ministry,
+    string? Department,
+    string? Office,
+    string? BuyerName,
+    string? BuyerDesignation,
+    // ── Scraped source documents (the actual GeM PDFs in S3) ──
+    IReadOnlyList<TenderSourceDocumentDto> SourceDocuments,
+    // ── Full timeline (publishedAt / bidStartAt / bidEndAt / bidOpeningAt / validityDays / contractDuration) ──
+    TenderTimelineDto? Timeline
+);
+
+/// <summary>
+/// A document scraped from the source platform and stored in S3. The file is
+/// served to the client via a short-lived presigned URL — the BFF never streams
+/// the bytes itself. <see cref="HasStoredKey"/> is false for older tenders that
+/// were enriched before s3Key was persisted; the download endpoint falls back to
+/// reconstructing the key from the platform tender id + document id.
+/// </summary>
+public record TenderSourceDocumentDto(
+    string DocumentId,
+    string? Type,
+    string? FileName,
+    bool HasStoredKey
 );
 
 public record TenderDocumentDto(

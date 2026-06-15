@@ -43,7 +43,8 @@ public record TenderOrganizationDto(
     string? Department,
     string? Organization,
     string? Office,
-    string? BuyerName
+    string? BuyerName,
+    string? BuyerDesignation
 );
 
 public record TenderLocationDto(
@@ -63,9 +64,49 @@ public record TenderTimelineDto(
 
 public record TenderEmdDto(bool Required, decimal? Amount, string? Bank);
 
+public record TenderEpbgDto(bool Required, double? Percentage, int? DurationMonths, string? Bank);
+
+public record TenderTurnoverDto(decimal? Bidder, decimal? Oem);
+
 public record TenderFinancialDto(
-    decimal?    EstimatedBidValue,
-    TenderEmdDto? Emd
+    decimal?            EstimatedBidValue,
+    TenderEmdDto?       Emd,
+    TenderEpbgDto?      Epbg,
+    TenderTurnoverDto?  TurnoverRequirement
+);
+
+public record TenderQualificationDto(
+    int?      ExperienceYears,
+    double?   PastPerformancePercentage,
+    bool      StartupRelaxation,
+    bool      MseRelaxation,
+    string[]? RequiredDocuments,
+    string[]? Certifications
+);
+
+public record TenderReverseAuctionDto(bool Enabled, string? Rule);
+
+public record TenderCommercialDto(
+    string?                 EvaluationMethod,
+    string?                 BidType,
+    TenderReverseAuctionDto? ReverseAuction,
+    bool                    BidSplitting
+);
+
+public record TenderComplianceDto(
+    bool    MiiPreference,
+    bool    MsePreference,
+    double? PurchasePreferencePercent
+);
+
+public record TenderItemDto(
+    string?  Name,
+    string?  Category,
+    string?  Unit,
+    double?  Quantity,
+    decimal? UnitPrice,
+    decimal? TotalAmount,
+    string?  Specifications
 );
 
 public record TenderAiDto(
@@ -85,7 +126,7 @@ public record TenderStatusDto(
     bool    IsCancelled
 );
 
-public record TenderDocumentRefDto(string? Type, string? FileName, string? DocumentId);
+public record TenderDocumentRefDto(string? Type, string? FileName, string? DocumentId, string? S3Bucket, string? S3Key);
 
 public record TenderTechSpecDto(string? Group, string? Name, string? Value);
 
@@ -100,6 +141,10 @@ public record TenderSearchItemDto(
     TenderLocationDto?   Location,
     TenderTimelineDto?   Timeline,
     TenderFinancialDto?  Financial,
+    TenderQualificationDto? Qualification,
+    TenderCommercialDto? Commercial,
+    TenderComplianceDto? Compliance,
+    IReadOnlyList<TenderItemDto>? Items,
     TenderAiDto?         Ai,
     TenderStatusDto?     Status,
     IReadOnlyList<TenderDocumentRefDto>? Documents,

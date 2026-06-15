@@ -163,6 +163,14 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
     public async Task<TenderDetailDto> GetTenderAsync(
         string tenderId, CancellationToken ct = default)
     {
+        var searchItem = await GetRawTenderAsync(tenderId, ct)
+            ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
+        return searchItem.ToDetailsDto();
+    }
+
+    public async Task<TenderSearchItemDto?> GetRawTenderAsync(
+        string tenderId, CancellationToken ct = default)
+    {
         var url = $"api/tenders/{tenderId}";
         _log.LogDebug("BiddingBuddyServices → GET {Url}", url);
 
@@ -202,10 +210,8 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         }
 
         var stream = await response.Content.ReadAsStreamAsync(ct);
-        var searchItem = await JsonSerializer.DeserializeAsync<TenderSearchItemDto>(stream, _json, ct) ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
-
-        // Map to TenderDetailDto using the shared translator
-        return searchItem.ToDetailsDto();
+        return await JsonSerializer.DeserializeAsync<TenderSearchItemDto>(stream, _json, ct)
+            ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
     }
 
     // ── token management ──────────────────────────────────────────────────────
