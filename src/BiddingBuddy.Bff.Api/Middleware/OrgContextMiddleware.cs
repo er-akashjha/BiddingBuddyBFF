@@ -6,11 +6,11 @@ namespace BiddingBuddy.Bff.Api.Middleware;
 /// <summary>
 /// Validates X-Org-Id header and confirms the calling user is an active member.
 /// Sets HttpContext.Items["OrgId"] for controllers.
-/// Skipped for /api/auth/* and /internal/* routes.
+/// Skipped for /api/auth/*, /api/public/* (anonymous guest browsing), and /internal/* routes.
 /// </summary>
 public class OrgContextMiddleware(RequestDelegate next)
 {
-    private static readonly string[] SkipPrefixes = ["/api/auth", "/internal", "/swagger", "/health"];
+    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/internal", "/swagger", "/health"];
 
     public async Task InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo)
     {

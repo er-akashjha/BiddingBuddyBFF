@@ -4,8 +4,10 @@ using BiddingBuddy.Bff.Api.Swagger;
 using BiddingBuddy.Bff.Core.Extensions;
 using BiddingBuddy.Bff.Infrastructure.Extensions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,6 +39,24 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+
+// ── Rate limiting ───────────────────────────────────────────────────────────────
+// Protects the anonymous /api/public/* endpoints from scraping. Each public call
+// fans out to BiddingBuddyServices on a shared service token, so an unthrottled
+// open endpoint is an abuse risk. Fixed window, partitioned by client IP.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("public", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window      = TimeSpan.FromMinutes(1),
+                QueueLimit  = 0,
+            }));
+});
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 var frontendUrl = builder.Configuration["Frontend:BaseUrl"] ?? "http://localhost:3000";
@@ -125,6 +145,7 @@ app.UseSwaggerUI(c =>
 app.UseExceptionHandler();
 app.UseHttpsRedirection();
 app.UseCors("AllowFrontend");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<OrgContextMiddleware>();
 app.UseAuthorization();
