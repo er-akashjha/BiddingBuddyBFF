@@ -11,7 +11,6 @@ public static class PublicTenderMappings
 {
     public static PublicTenderListItemDto ToPublic(this TenderListItemDto t) => new(
         Id:            t.Id,
-        GemTenderId:   t.GemTenderId,
         Title:         t.Title,
         BuyerOrgName:  t.BuyerOrgName,
         State:         t.State,
@@ -35,7 +34,6 @@ public static class PublicTenderMappings
 
     public static PublicTenderDetailDto ToPublic(this TenderDetailDto t) => new(
         Id:               t.Id,
-        GemTenderId:      t.GemTenderId,
         Title:            t.Title,
         Description:      t.Description,
         BuyerOrgName:     t.BuyerOrgName,

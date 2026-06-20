@@ -15,6 +15,9 @@ public class PublicTenderMappingsTests
         "AiScore", "EligibilityScore", "WinProbability", "RiskScore",
         "AiSummary", "AiAnalysis", "OrgSettings", "CorrigendumCount",
         "IsSaved", "IsTracked",
+        // The GeM tender reference must never reach anonymous guests — they could
+        // use it to fetch the tender directly on gem.gov.in and bypass the product.
+        "GemTenderId",
     ];
 
     private static TenderListItemDto SampleListItem() => new(
@@ -90,7 +93,6 @@ public class PublicTenderMappingsTests
         var pub = src.ToPublic();
 
         Assert.Equal(src.Id, pub.Id);
-        Assert.Equal(src.GemTenderId, pub.GemTenderId);
         Assert.Equal(src.Title, pub.Title);
         Assert.Equal(src.BuyerOrgName, pub.BuyerOrgName);
         Assert.Equal(src.State, pub.State);

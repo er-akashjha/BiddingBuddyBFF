@@ -12,10 +12,14 @@ namespace BiddingBuddy.Bff.Core.DTOs.Tenders;
 //
 // Kept intentionally separate from TenderListItemDto / TenderDetailDto so future
 // UI changes never widen the public contract by accident.
+//
+// NOTE: GemTenderId is deliberately ABSENT. The real GeM tender reference is never
+// exposed to anonymous guests — otherwise they could take it straight to gem.gov.in
+// and bypass the product. Authenticated endpoints (TenderListItemDto/TenderDetailDto)
+// still carry it for paying customers.
 
 public record PublicTenderListItemDto(
     Guid Id,
-    string GemTenderId,
     string Title,
     string? BuyerOrgName,
     string? State,
@@ -39,7 +43,6 @@ public record PublicPagedTenderListDto(
 
 public record PublicTenderDetailDto(
     Guid Id,
-    string GemTenderId,
     string Title,
     string? Description,
     string? BuyerOrgName,
