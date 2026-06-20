@@ -3,10 +3,14 @@ using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
-public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
+public class InternalPipelineService(
+    BffDbContext db,
+    IMatchingService matching,
+    ILogger<InternalPipelineService> log) : IInternalPipelineService
 {
     public async Task<UpsertTenderResponseDto> UpsertTenderAsync(UpsertTenderDto dto, CancellationToken ct = default)
     {
@@ -43,6 +47,7 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
             };
             db.Tenders.Add(tender);
             await db.SaveChangesAsync(ct);
+            await RunMatchingSafeAsync(tender.Id, ct);
             return new UpsertTenderResponseDto(tender.Id, true);
         }
 
@@ -70,7 +75,22 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
         if (dto.RawData is not null) existing.RawData = dto.RawData;
 
         await db.SaveChangesAsync(ct);
+        await RunMatchingSafeAsync(existing.Id, ct);
         return new UpsertTenderResponseDto(existing.Id, false);
+    }
+
+    // Match this tender against client interests. Best-effort: a matching/notification
+    // failure must never fail the pipeline's tender upsert.
+    private async Task RunMatchingSafeAsync(Guid tenderId, CancellationToken ct)
+    {
+        try
+        {
+            await matching.OnTenderUpsertedAsync(tenderId, ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "[Internal] Tender-interest matching failed for tender {TenderId}", tenderId);
+        }
     }
 
     public async Task UpsertDocumentContentAsync(string gemTenderId, UpsertDocumentContentDto dto, CancellationToken ct = default)

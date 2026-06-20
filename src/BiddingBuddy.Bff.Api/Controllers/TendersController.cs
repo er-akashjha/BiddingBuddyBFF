@@ -36,6 +36,38 @@ public class TendersController(
         return Ok(result);
     }
 
+    /// <summary>
+    /// Distinct filter option values (categories, states) present in the tender data.
+    /// Drives the UI filter dropdowns so they stay in sync with the scraped data.
+    /// </summary>
+    [HttpGet("facets")]
+    [ProducesResponseType(typeof(TenderFacetsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Facets([FromQuery] int limit = 15, CancellationToken ct = default)
+    {
+        var result = await servicesClient.GetTenderFacetsAsync(limit, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Type-ahead options for a single facet field ("category" or "state").
+    /// Empty <c>search</c> → default top-<c>limit</c> set; a non-empty search returns
+    /// every matching value (pass <c>limit=0</c> for no cap). Backs the multi-select filters.
+    /// </summary>
+    [HttpGet("facet-options")]
+    [ProducesResponseType(typeof(List<string>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> FacetOptions(
+        [FromQuery] string field,
+        [FromQuery] string? search,
+        [FromQuery] int limit = 15,
+        CancellationToken ct = default)
+    {
+        var values = await servicesClient.GetTenderFacetOptionsAsync(field, search, limit, ct);
+        return Ok(values);
+    }
+
     /// <summary>Full tender detail by ID from BiddingBuddyServices.</summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(TenderDetailDto), StatusCodes.Status200OK)]

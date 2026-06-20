@@ -92,6 +92,8 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IAnalysisService, AnalysisService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IGemIntegrationService, GemIntegrationService>();
+        services.AddScoped<ITenderAlertRuleService, TenderAlertRuleService>();
+        services.AddScoped<IMatchingService, MatchingService>();
         services.AddScoped<IInternalPipelineService, InternalPipelineService>();
 
         // Schema migrator (runs embedded SQL scripts via /internal/migrations)
