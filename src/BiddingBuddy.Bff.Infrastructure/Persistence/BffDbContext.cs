@@ -21,6 +21,11 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();
     public DbSet<OrgTenderSettings> OrgTenderSettings => Set<OrgTenderSettings>();
 
+    // Tender-match digests (interests → buffered matches → grouped notification)
+    public DbSet<TenderAlertRule> TenderAlertRules => Set<TenderAlertRule>();
+    public DbSet<OrgAlertSettings> OrgAlertSettings => Set<OrgAlertSettings>();
+    public DbSet<TenderMatch> TenderMatches => Set<TenderMatch>();
+
     // Bids
     public DbSet<Bid> Bids => Set<Bid>();
     public DbSet<BidActivity> BidActivities => Set<BidActivity>();

@@ -92,11 +92,12 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | Analysis | `/api/analysis` | Dashboard KPIs, recommendations, performance, market trends |
 | Notifications | `/api/notifications` | In-app inbox: list, mark read, channel preferences (backed by `user_notifications` since the rename — see Notification subsystem below) |
 | Integrations | `/api/integrations` | GeM portal config, sync trigger, sync status |
+| Tender alert rules | `/api/tender-alert-rules` | Client "interests" CRUD + `/settings` (digest size, channels, roles) — see Tender-match digests below |
 
 ### Internal (API-key only — `X-Api-Key` header, bypasses org middleware)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/internal/tenders` | Upsert enriched tender from BidProcessor |
+| POST | `/internal/tenders` | Upsert enriched tender from BidProcessor (also runs interest matching — see Tender-match digests) |
 | POST | `/internal/tenders/{gemTenderId}/documents` | Store extracted document text |
 | POST | `/internal/competitors` | Record competitor bid observation |
 | POST | `/internal/analysis` | Store AI analysis results |
@@ -104,6 +105,7 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | POST | `/internal/migrations` | Apply all pending migrations (idempotent — see DbMigrator below) |
 | GET/POST/PATCH/DELETE | `/internal/notification-templates[/{id}]` | Admin CRUD over `notification_templates` (global config — see Notification subsystem) |
 | POST | `/internal/notifications` | Trigger a notification dispatch from outside the BFF (BidProcessor, admin tools). In-BFF flows call `INotificationPublisher` directly. |
+| POST | `/internal/digests/flush` | Time-fallback flush of buffered tender matches (drive on a daily schedule — see Tender-match digests) |
 
 ## Auth Design
 
@@ -167,6 +169,7 @@ Key table groups:
 | Intelligence | `competitors`, `competitor_observations` |
 | Platform | `user_notifications`, `gem_integrations`, `analysis_results` |
 | Notification dispatch | `notifications`, `notification_deliveries`, `notification_templates`, `notification_logs` |
+| Tender-match digests | `tender_alert_rules`, `org_alert_settings`, `tender_matches` (migration `0004`) |
 | Schema | `schema_migrations` (DbMigrator state) |
 
 **Naming-rename note:** what used to be `notifications` (the in-app inbox the
@@ -479,6 +482,43 @@ the BFF (BidProcessor, admin tools).
 `RabbitMqPublisher` is a singleton holding one `IConnection`; it opens a fresh
 channel per publish (cheap), declares the target queue idempotently, and sends
 persistent JSON.
+
+## Tender-match digests
+
+Matches freshly-enriched tenders against each org's saved "interests" and delivers
+them as a **batched digest** (a group of tenders per email, not one-per-tender).
+
+### Tables (migration `0004_add_tender_matching.sql`)
+
+| Table | Purpose |
+|---|---|
+| `tender_alert_rules` | Per-org interest. Optional `categories[]`, `states[]`, `keywords[]`, `min_value`/`max_value`, `min_ai_score`, `is_active`. Empty constraint = ignored (AND of the set ones). |
+| `org_alert_settings` | Per-org delivery prefs: `is_enabled`, `digest_size` (1–50, default 10), `notify_channels[]` (default Email,InApp), `notify_roles[]` (default owner,admin,bid_manager). |
+| `tender_matches` | Buffer + dedup. `status` pending→sent→expired, `batch_id`, `sent_at`. UNIQUE `(org_id, tender_id)` so a tender is queued once per org even across rules / re-enrichment. |
+
+### Flow
+
+```
+POST /internal/tenders (from EnrichBidWorker)
+  └─ InternalPipelineService.UpsertTenderAsync
+       └─ MatchingService.OnTenderUpsertedAsync   (best-effort; never fails the upsert)
+            1. test live tender against every active rule → matched orgs
+            2. insert tender_matches (pending), deduped by (org, tender)
+            3. count-trigger: if an org's pending count ≥ its digest_size → flush now
+                 - order soonest-closing-deadline first, expire stale matches
+                 - resolve recipients (org members in notify_roles)
+                 - INotificationPublisher.SendAsync("TENDER_MATCH") per recipient (Email + InApp)
+                 - mark the batch sent
+
+POST /internal/digests/flush  (daily schedule)
+  └─ MatchingService.FlushAllDueAsync — time-fallback: flush every org with
+     pending matches regardless of digest_size; expire matches past deadline.
+```
+
+- **Template:** `TENDER_MATCH` (Email + InApp), seeded by migration `0004`. Payload is `{ FirstName, Count, One, FirstTitle, Tenders[]{Title,Category,State,Value,ClosingDate,Url}, AllUrl }` — the Email body iterates `{{#each Tenders}}`.
+- **Why in the BFF:** rules (Postgres), org/user data, and `INotificationPublisher` all live here, so matching is one in-process step off the existing `/internal/tenders` upsert — no extra pipeline plumbing.
+- **Services:** `ITenderAlertRuleService` (CRUD + settings), `IMatchingService` (matching + flush). UI: SettingsPage → **Interests** tab.
+- **Go-live:** apply migration `0004`; ensure BidProcessor `BffInternalApi:ApiKey` matches `Pipeline:ApiKey`; schedule `POST /internal/digests/flush` daily.
 
 ## Key Reference
 

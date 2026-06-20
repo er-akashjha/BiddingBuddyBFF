@@ -19,4 +19,14 @@ public interface IBiddingBuddyServicesClient
     Task<TenderSearchItemDto?> GetRawTenderAsync(string tenderId, CancellationToken ct = default);
     Task<List<TenderListItemDto>> SearchTendersAsync(TenderSearchQueryDto query, CancellationToken ct = default);
     Task<PagedTenderListDto> SearchTendersPagedAsync(TenderSearchQueryDto query, CancellationToken ct = default);
+
+    /// <summary>Default filter option values (top-N categories + states) for the initial dropdown render.</summary>
+    Task<TenderFacetsDto> GetTenderFacetsAsync(int limit = 15, CancellationToken ct = default);
+
+    /// <summary>
+    /// Type-ahead options for a single facet field ("category" or "state"). Empty
+    /// search → default top-N; non-empty search → all matches (pass limit=0 for no cap).
+    /// </summary>
+    Task<List<string>> GetTenderFacetOptionsAsync(
+        string field, string? search, int limit, CancellationToken ct = default);
 }

@@ -8,6 +8,8 @@ public record TenderSearchQueryDto
     public string?   Status            { get; init; }
     public string?   CategoryPrimary   { get; init; }
     public string?   CategorySecondary { get; init; }
+    public List<string>? Categories    { get; init; }   // multi-select category filter
+    public List<string>? States        { get; init; }   // multi-select state filter
     public string?   Tag               { get; init; }
     public string?   Organization      { get; init; }
     public string?   Ministry          { get; init; }
@@ -162,6 +164,16 @@ public record TenderSearchResultDto(
     int  TotalPages,
     bool HasNextPage,
     bool HasPreviousPage
+);
+
+/// <summary>
+/// Distinct filter option values (categories, states) present in the tender data.
+/// Returned by BiddingBuddyServices /api/tenders/facets and forwarded as-is to the
+/// client so the UI dropdowns reflect real data instead of hardcoded lists.
+/// </summary>
+public record TenderFacetsDto(
+    IReadOnlyList<string> Categories,
+    IReadOnlyList<string> States
 );
 
 /// <summary>Paged tender list returned to the BFF client (items translated to TenderListItemDto)</summary>

@@ -160,6 +160,67 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
             HasPreviousPage: rawResult.HasPreviousPage);
     }
 
+    public Task<TenderFacetsDto> GetTenderFacetsAsync(int limit = 15, CancellationToken ct = default)
+        => GetJsonAsync<TenderFacetsDto>($"api/tenders/facets?limit={limit}", ct);
+
+    public Task<List<string>> GetTenderFacetOptionsAsync(
+        string field, string? search, int limit, CancellationToken ct = default)
+    {
+        var qs = HttpUtility.ParseQueryString(string.Empty);
+        qs["field"] = field;
+        if (!string.IsNullOrWhiteSpace(search)) qs["search"] = search;
+        qs["limit"] = limit.ToString();
+        return GetJsonAsync<List<string>>($"api/tenders/facet-options?{qs}", ct);
+    }
+
+    /// <summary>
+    /// Shared authenticated GET + deserialize with one-shot 401 token refresh.
+    /// Mirrors the inline pattern used by the older methods in this class.
+    /// </summary>
+    private async Task<T> GetJsonAsync<T>(string url, CancellationToken ct)
+    {
+        _log.LogDebug("BiddingBuddyServices → GET {Url}", url);
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer", await GetTokenAsync(ct));
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.SendAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Network error reaching BiddingBuddyServices at {Base}", _http.BaseAddress);
+            throw new InvalidOperationException(
+                $"Could not connect to BiddingBuddyServices: {ex.Message}", ex);
+        }
+
+        // Token may have been invalidated externally — refresh once and retry
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            _log.LogWarning("BiddingBuddyServices returned 401 — refreshing token and retrying.");
+            InvalidateToken();
+            request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Bearer", await GetTokenAsync(ct));
+            response = await _http.SendAsync(request, ct);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new InvalidOperationException(
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+        }
+
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<T>(stream, _json, ct)
+            ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
+    }
+
     public async Task<TenderDetailDto> GetTenderAsync(
         string tenderId, CancellationToken ct = default)
     {
@@ -283,6 +344,15 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (!string.IsNullOrWhiteSpace(q.Status))             qs["Status"]             = q.Status;
         if (!string.IsNullOrWhiteSpace(q.CategoryPrimary))    qs["CategoryPrimary"]    = q.CategoryPrimary;
         if (!string.IsNullOrWhiteSpace(q.CategorySecondary))  qs["CategorySecondary"]  = q.CategorySecondary;
+
+        // Multi-select facets — repeated query params (Categories=a&Categories=b)
+        // bind to the List<string> properties on the Services-side TenderSearchQuery.
+        if (q.Categories is not null)
+            foreach (var c in q.Categories)
+                if (!string.IsNullOrWhiteSpace(c)) qs.Add("Categories", c);
+        if (q.States is not null)
+            foreach (var s in q.States)
+                if (!string.IsNullOrWhiteSpace(s)) qs.Add("States", s);
         if (!string.IsNullOrWhiteSpace(q.Tag))                qs["Tag"]                = q.Tag;
         if (!string.IsNullOrWhiteSpace(q.Organization))       qs["Organization"]       = q.Organization;
         if (!string.IsNullOrWhiteSpace(q.Ministry))           qs["Ministry"]           = q.Ministry;
