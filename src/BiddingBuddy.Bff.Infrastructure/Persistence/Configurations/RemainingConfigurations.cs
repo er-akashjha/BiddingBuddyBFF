@@ -113,6 +113,28 @@ public class PendingRegistrationConfiguration : IEntityTypeConfiguration<Pending
     }
 }
 
+public class PasswordResetCodeConfiguration : IEntityTypeConfiguration<PasswordResetCode>
+{
+    public void Configure(EntityTypeBuilder<PasswordResetCode> b)
+    {
+        b.ToTable("password_reset_codes");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.UserId).HasColumnName("user_id");
+        b.Property(x => x.CodeHash).HasColumnName("code_hash").IsRequired();
+        b.Property(x => x.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
+        b.Property(x => x.ResendCount).HasColumnName("resend_count").HasDefaultValue(0);
+        b.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+        b.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+        // The partial unique "one active reset per user" (WHERE consumed_at IS NULL)
+        // lives in the SQL migration — EF Core can't model a partial index in the fluent API.
+        b.HasIndex(x => x.UserId);
+        b.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId);
+    }
+}
+
 public class BidCommentConfiguration : IEntityTypeConfiguration<BidComment>
 {
     public void Configure(EntityTypeBuilder<BidComment> b)

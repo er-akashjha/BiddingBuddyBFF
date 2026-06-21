@@ -252,6 +252,98 @@ public class AuthService(
         return invite;
     }
 
+    public async Task<PasswordResetRequestedDto> RequestPasswordResetAsync(string email, CancellationToken ct = default)
+    {
+        email = NormalizeEmail(email);
+
+        var user = await userRepo.FindByEmailAsync(email, ct);
+
+        // Only accounts that have a password can reset one. For an unknown email or an
+        // OAuth-only user we return the SAME response and send nothing — the caller can't
+        // tell whether an account exists (no enumeration).
+        if (user is null || string.IsNullOrEmpty(user.PasswordHash))
+            return new PasswordResetRequestedDto("reset_code_sent", (int)OtpLifetime.TotalSeconds);
+
+        var (rawCode, codeHash) = GenerateOtp();
+
+        // Supersede any prior active reset code for this user (partial unique guard).
+        var prior = await db.PasswordResetCodes
+            .Where(p => p.UserId == user.Id && p.ConsumedAt == null)
+            .ToListAsync(ct);
+        if (prior.Count > 0)
+        {
+            foreach (var p in prior) { p.ConsumedAt = DateTime.UtcNow; p.UpdatedAt = DateTime.UtcNow; }
+            await db.SaveChangesAsync(ct);
+        }
+
+        db.PasswordResetCodes.Add(new PasswordResetCode
+        {
+            Id        = Guid.NewGuid(),
+            UserId    = user.Id,
+            CodeHash  = codeHash,
+            ExpiresAt = DateTime.UtcNow.Add(OtpLifetime),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+
+        await SendPasswordResetEmailAsync(user, rawCode, ct);
+
+        return new PasswordResetRequestedDto(
+            "reset_code_sent",
+            (int)OtpLifetime.TotalSeconds,
+            IsDevelopment ? rawCode : null);
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordDto dto, CancellationToken ct = default)
+    {
+        if ((dto.NewPassword ?? string.Empty).Length < 8)
+            throw new ArgumentException("Password must be at least 8 characters.");
+
+        var email = NormalizeEmail(dto.Email);
+        var user = await userRepo.FindByEmailAsync(email, ct);
+        if (user is null)
+            throw new InvalidOperationException("CODE_INVALID");
+
+        var reset = await db.PasswordResetCodes
+            .Where(p => p.UserId == user.Id && p.ConsumedAt == null)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (reset is null || reset.ExpiresAt < DateTime.UtcNow)
+            throw new InvalidOperationException("CODE_INVALID");
+
+        if (reset.AttemptCount >= MaxOtpAttempts)
+            throw new InvalidOperationException("TOO_MANY_ATTEMPTS");
+
+        var providedHash = HashOtp((dto.Code ?? string.Empty).Trim());
+        var matches = CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(providedHash),
+            Convert.FromHexString(reset.CodeHash));
+
+        if (!matches)
+        {
+            reset.AttemptCount++;
+            reset.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            throw new InvalidOperationException("CODE_INVALID");
+        }
+
+        // Correct code → set the new password, burn the code, and revoke every existing
+        // session so an old/stolen refresh token can't outlive the reset.
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword!);
+        user.UpdatedAt = DateTime.UtcNow;
+        await userRepo.UpdateAsync(user, ct);
+
+        reset.ConsumedAt = DateTime.UtcNow;
+        reset.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        await db.RefreshTokens
+            .Where(t => t.UserId == user.Id && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, (DateTime?)DateTime.UtcNow), ct);
+    }
+
     public async Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default)
     {
         var user = await userRepo.FindByEmailAsync(dto.Email, ct);
@@ -487,6 +579,36 @@ public class AuthService(
         catch (Exception ex)
         {
             log.LogWarning(ex, "EMAIL_VERIFICATION send failed for {Email}; pending row kept, code can be resent.", reg.Email);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort PASSWORD_RESET send (Email channel). Failures are logged, not thrown:
+    /// the reset-code row is kept and the user can request another, and the processor's
+    /// pending-grace poller re-drives any RabbitMQ hiccup.
+    /// </summary>
+    private async Task SendPasswordResetEmailAsync(User user, string rawCode, CancellationToken ct)
+    {
+        try
+        {
+            await notifications.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "PASSWORD_RESET",
+                UserId:       user.Id,
+                Payload:      new Dictionary<string, object>
+                {
+                    ["FirstName"]     = FirstName(user.Name),
+                    ["Code"]          = rawCode,
+                    ["ExpiryMinutes"] = (int)OtpLifetime.TotalMinutes,
+                },
+                Recipients: new[]
+                {
+                    new NotificationRecipientDto(NotificationChannel.Email, user.Email),
+                }), ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "PASSWORD_RESET send failed for user {UserId}; the code row is kept and can be re-requested.", user.Id);
         }
     }
 

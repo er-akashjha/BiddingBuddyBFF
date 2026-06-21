@@ -457,6 +457,7 @@ public class AuthService(INotificationPublisher publisher, ...)
 | Email verified (`POST /api/auth/verify-email`) → account created | `AuthService.VerifyEmailAsync` → `CreateVerifiedAccountAsync` | `WELCOME` | Email + InApp |
 | First-time OAuth signup | `AuthService.HandleOAuthCallbackAsync` (only when `isNewUser`) | `WELCOME` | Email + InApp |
 | Org member invite | `OrganizationService.InviteMemberAsync` | `TEAM_INVITATION` | Email + InApp |
+| Forgot password (`POST /api/auth/forgot-password`) | `AuthService.RequestPasswordResetAsync` | `PASSWORD_RESET` (6-digit OTP) | Email |
 
 **Verify-first signup:** password signup no longer creates the account directly.
 `register` stashes BCrypt-hashed credentials in `pending_registrations` (migration
@@ -465,6 +466,13 @@ only by `verify-email` once the code is confirmed (`resend-verification` re-issu
 This applies to invite signups too (the invite token is carried on the pending row
 and consumed at verify time). OAuth is unchanged. In Development the `register`
 response includes a `devCode` so the flow is testable without a mailbox.
+
+**Password reset (OTP):** `forgot-password` emails a 6-digit OTP whose hash is stored
+in `password_reset_codes` (migration `0007`); `reset-password` verifies the code, sets
+the new BCrypt password, and **revokes all of the user's refresh tokens** (existing
+sessions die). `forgot-password` always returns 200 with the same shape (no
+enumeration) and sends nothing for unknown emails or OAuth-only users; in Development
+it includes a `devCode`. Same OTP helpers/expiry/attempt-cap as verify-first signup.
 
 Each call is wrapped in a try/catch with `ILogger.LogWarning` — notification
 failures NEVER fail the parent flow (the user was created / the membership was

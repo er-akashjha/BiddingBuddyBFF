@@ -95,6 +95,25 @@ CREATE INDEX ix_pending_reg_email ON pending_registrations (email);
 CREATE UNIQUE INDEX uq_pending_reg_one_active_per_email
   ON pending_registrations (email) WHERE consumed_at IS NULL;
 
+-- Password reset via 6-digit OTP. "Forgot password" stores the code hash here;
+-- the password changes only when the matching code is submitted. See migration 0007.
+-- A partial unique index keeps one active (un-consumed) code per user.
+CREATE TABLE password_reset_codes (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash     TEXT        NOT NULL,
+  attempt_count INTEGER     NOT NULL DEFAULT 0,
+  resend_count  INTEGER     NOT NULL DEFAULT 0,
+  expires_at    TIMESTAMPTZ NOT NULL,
+  consumed_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX ix_password_reset_user ON password_reset_codes (user_id);
+CREATE UNIQUE INDEX uq_password_reset_one_active_per_user
+  ON password_reset_codes (user_id) WHERE consumed_at IS NULL;
+
 -- ─────────────────────────────────────────────────────────────────
 -- 2. ORGANIZATIONS & MEMBERS
 -- ─────────────────────────────────────────────────────────────────
