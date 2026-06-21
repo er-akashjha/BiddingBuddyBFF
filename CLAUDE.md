@@ -453,9 +453,18 @@ public class AuthService(INotificationPublisher publisher, ...)
 **Wired triggers (in-BFF):**
 | Event | Service | Template | Channels |
 |---|---|---|---|
-| Password-based signup (`POST /api/auth/register`) | `AuthService.RegisterAsync` | `WELCOME` | Email + InApp |
+| Password signup start (`POST /api/auth/register`) | `AuthService.StartRegistrationAsync` | `EMAIL_VERIFICATION` (6-digit OTP) | Email |
+| Email verified (`POST /api/auth/verify-email`) → account created | `AuthService.VerifyEmailAsync` → `CreateVerifiedAccountAsync` | `WELCOME` | Email + InApp |
 | First-time OAuth signup | `AuthService.HandleOAuthCallbackAsync` (only when `isNewUser`) | `WELCOME` | Email + InApp |
 | Org member invite | `OrganizationService.InviteMemberAsync` | `TEAM_INVITATION` | Email + InApp |
+
+**Verify-first signup:** password signup no longer creates the account directly.
+`register` stashes BCrypt-hashed credentials in `pending_registrations` (migration
+`0006`) + emails a 6-digit OTP; the `User`/`Organization`/`OrgMember` are created
+only by `verify-email` once the code is confirmed (`resend-verification` re-issues).
+This applies to invite signups too (the invite token is carried on the pending row
+and consumed at verify time). OAuth is unchanged. In Development the `register`
+response includes a `devCode` so the flow is testable without a mailbox.
 
 Each call is wrapped in a try/catch with `ILogger.LogWarning` — notification
 failures NEVER fail the parent flow (the user was created / the membership was
