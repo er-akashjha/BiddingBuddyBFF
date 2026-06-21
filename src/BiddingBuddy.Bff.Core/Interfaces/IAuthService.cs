@@ -14,6 +14,14 @@ public interface IAuthService
     Task<TokenResponseDto> VerifyEmailAsync(VerifyEmailDto dto, CancellationToken ct = default);
     /// <summary>Re-issue an OTP for a pending signup. No-op (silent) if none is active.</summary>
     Task ResendVerificationAsync(string email, CancellationToken ct = default);
+    /// <summary>
+    /// Email a 6-digit password-reset code. Always returns the same shape regardless of
+    /// whether the email maps to a resettable account (no enumeration). Sends nothing for
+    /// unknown emails or OAuth-only users.
+    /// </summary>
+    Task<PasswordResetRequestedDto> RequestPasswordResetAsync(string email, CancellationToken ct = default);
+    /// <summary>Verify the reset code and set the new password; revokes all existing sessions.</summary>
+    Task ResetPasswordAsync(ResetPasswordDto dto, CancellationToken ct = default);
     Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default);
     Task<TokenResponseDto> HandleOAuthCallbackAsync(string provider, string code, CancellationToken ct = default);
     Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default);

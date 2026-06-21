@@ -84,6 +84,44 @@ public class AuthController(
         return NoContent();
     }
 
+    /// <summary>
+    /// Request a 6-digit password-reset code by email. Always 200 with the same shape
+    /// regardless of whether the email maps to a resettable account (no enumeration).
+    /// </summary>
+    [HttpPost("forgot-password")]
+    [ProducesResponseType(typeof(PasswordResetRequestedDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto, CancellationToken ct)
+    {
+        var result = await authService.RequestPasswordResetAsync(dto.Email, ct);
+        return Ok(result);
+    }
+
+    /// <summary>Reset the password using the emailed 6-digit code. Revokes all existing sessions.</summary>
+    [HttpPost("reset-password")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto, CancellationToken ct)
+    {
+        try
+        {
+            await authService.ResetPasswordAsync(dto, ct);
+            return Ok(new { status = "password_reset" });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "TOO_MANY_ATTEMPTS")
+        {
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)   // CODE_INVALID (wrong/expired/unknown)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)            // password too short
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     /// <summary>Login with email and password. Returns access + refresh tokens.</summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status200OK)]
