@@ -71,5 +71,6 @@ jobs:
             set -e
             echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
             cd /opt/apps
-            git pull --ff-only
+            git fetch origin
+            git reset --hard origin/main
             bash ./scripts/deploy-service.sh "${{ env.SERVICE }}" "sha-$(echo ${{ github.sha }} | cut -c1-7)"
