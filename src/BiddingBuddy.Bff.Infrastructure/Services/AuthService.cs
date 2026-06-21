@@ -22,31 +22,156 @@ public class AuthService(
     BffDbContext db,
     ILogger<AuthService> log) : IAuthService
 {
-    public async Task<TokenResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
+    public async Task<RegistrationPendingDto> StartRegistrationAsync(RegisterDto dto, CancellationToken ct = default)
     {
         if (dto.Password.Length < 8)
             throw new ArgumentException("Password must be at least 8 characters.");
 
-        if (await userRepo.FindByEmailAsync(dto.Email, ct) is not null)
+        var email = NormalizeEmail(dto.Email);
+
+        // The account is NOT created here. We stash the (hashed) credentials in
+        // pending_registrations and email a 6-digit OTP; the real user/org are only
+        // created in VerifyEmailAsync once the code is confirmed.
+        if (await userRepo.FindByEmailAsync(email, ct) is not null)
             throw new InvalidOperationException("EMAIL_EXISTS");
 
-        // If an invite token is supplied, the new user JOINS the inviting org
-        // (with the role recorded on the invite) and we DO NOT auto-create a
-        // personal org. The token must hash to a pending, unexpired invite whose
-        // email matches the registration email — we don't want a leaked token to
-        // grant access to a different email.
-        OrganizationInvite? invite = null;
+        // Validate any invite token now for fast feedback. It is re-validated AND
+        // consumed at verify time (CreateVerifiedAccountAsync), so a token that
+        // expires between now and verification is still caught.
         if (!string.IsNullOrWhiteSpace(dto.InviteToken))
+            await ValidateInviteAsync(dto.InviteToken!, email, ct);
+
+        var (rawCode, codeHash) = GenerateOtp();
+
+        // Supersede any prior active pending registration for this email so the
+        // partial unique index (one active row per email) doesn't block the insert.
+        // Committed in its own round-trip BEFORE the insert so the old row is already
+        // consumed when the new one lands (mirrors the org-invite supersede).
+        var prior = await db.PendingRegistrations
+            .Where(p => p.Email == email && p.ConsumedAt == null)
+            .ToListAsync(ct);
+        if (prior.Count > 0)
         {
-            invite = await ValidateInviteAsync(dto.InviteToken!, dto.Email, ct);
+            foreach (var p in prior) { p.ConsumedAt = DateTime.UtcNow; p.UpdatedAt = DateTime.UtcNow; }
+            await db.SaveChangesAsync(ct);
         }
+
+        var pending = new PendingRegistration
+        {
+            Id           = Guid.NewGuid(),
+            Email        = email,
+            Name         = dto.Name,
+            // Hash the password NOW so plaintext never lands in the table.
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
+            // OrgName is ignored when joining via an invite (mirrors the old flow).
+            OrgName      = string.IsNullOrWhiteSpace(dto.InviteToken) ? dto.OrgName : null,
+            Phone        = dto.Phone,
+            InviteToken  = dto.InviteToken,
+            CodeHash     = codeHash,
+            ExpiresAt    = DateTime.UtcNow.Add(OtpLifetime),
+            CreatedAt    = DateTime.UtcNow,
+            UpdatedAt    = DateTime.UtcNow,
+        };
+        db.PendingRegistrations.Add(pending);
+        await db.SaveChangesAsync(ct);
+
+        await SendVerificationEmailAsync(pending, rawCode, ct);
+
+        return new RegistrationPendingDto(
+            Status:           "verification_pending",
+            Email:            email,
+            ExpiresInSeconds: (int)OtpLifetime.TotalSeconds,
+            // Dev-only: surface the code so the flow is testable without a mailbox.
+            DevCode:          IsDevelopment ? rawCode : null);
+    }
+
+    public async Task<TokenResponseDto> VerifyEmailAsync(VerifyEmailDto dto, CancellationToken ct = default)
+    {
+        var email = NormalizeEmail(dto.Email);
+
+        var pending = await db.PendingRegistrations
+            .Where(p => p.Email == email && p.ConsumedAt == null)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (pending is null || pending.ExpiresAt < DateTime.UtcNow)
+            throw new InvalidOperationException("CODE_INVALID");
+
+        if (pending.AttemptCount >= MaxOtpAttempts)
+            throw new InvalidOperationException("TOO_MANY_ATTEMPTS");
+
+        var providedHash = HashOtp((dto.Code ?? string.Empty).Trim());
+        var matches = CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(providedHash),
+            Convert.FromHexString(pending.CodeHash));
+
+        if (!matches)
+        {
+            pending.AttemptCount++;
+            pending.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            throw new InvalidOperationException("CODE_INVALID");
+        }
+
+        // Correct code → materialise the real account, then burn the pending row.
+        var tokens = await CreateVerifiedAccountAsync(pending, ct);
+        pending.ConsumedAt = DateTime.UtcNow;
+        pending.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return tokens;
+    }
+
+    public async Task ResendVerificationAsync(string email, CancellationToken ct = default)
+    {
+        email = NormalizeEmail(email);
+
+        var pending = await db.PendingRegistrations
+            .Where(p => p.Email == email && p.ConsumedAt == null)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        // No active pending registration, or the resend cap is hit → do nothing and
+        // return normally. The caller always replies 204, so an attacker can't probe
+        // which emails have a signup in flight.
+        if (pending is null || pending.ResendCount >= MaxResends)
+            return;
+
+        var (rawCode, codeHash) = GenerateOtp();
+        pending.CodeHash     = codeHash;
+        pending.AttemptCount = 0;                       // fresh code → fresh attempt budget
+        pending.ResendCount++;
+        pending.ExpiresAt    = DateTime.UtcNow.Add(OtpLifetime);
+        pending.UpdatedAt    = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        await SendVerificationEmailAsync(pending, rawCode, ct);
+    }
+
+    /// <summary>
+    /// Turns a verified <see cref="PendingRegistration"/> into a real account:
+    /// creates the <see cref="User"/> (with the already-hashed password), joins the
+    /// inviting org or auto-creates a personal one, issues tokens, and fires WELCOME.
+    /// This is the body that used to run inline in the immediate-create register.
+    /// </summary>
+    private async Task<TokenResponseDto> CreateVerifiedAccountAsync(PendingRegistration reg, CancellationToken ct)
+    {
+        // Re-check the email is still free — it could have been claimed (e.g. via
+        // OAuth) between StartRegistration and verification.
+        if (await userRepo.FindByEmailAsync(reg.Email, ct) is not null)
+            throw new InvalidOperationException("EMAIL_EXISTS");
+
+        // Re-validate the invite at consume time (it may have expired/been accepted
+        // since signup). A leaked token still can't target a different email.
+        OrganizationInvite? invite = null;
+        if (!string.IsNullOrWhiteSpace(reg.InviteToken))
+            invite = await ValidateInviteAsync(reg.InviteToken!, reg.Email, ct);
 
         var user = await userRepo.CreateAsync(new User
         {
-            Email = dto.Email,
-            Name = dto.Name,
-            Phone = dto.Phone,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
+            Email = reg.Email,
+            Name = reg.Name,
+            Phone = reg.Phone,
+            PasswordHash = reg.PasswordHash,    // already BCrypt-hashed at request time
             LastLoginAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -81,7 +206,7 @@ public class AuthService(
             var org = await orgRepo.CreateAsync(new Organization
             {
                 OwnedBy = user.Id,
-                Name = dto.OrgName,
+                Name = reg.OrgName ?? string.Empty,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
@@ -304,6 +429,65 @@ public class AuthService(
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    // ── Email-verification (OTP) helpers ───────────────────────────────────────
+
+    private static readonly TimeSpan OtpLifetime = TimeSpan.FromMinutes(15);
+    private const int MaxOtpAttempts = 5;   // wrong guesses before the code is dead
+    private const int MaxResends     = 5;   // OTP re-issues per pending registration
+
+    // Dev-only escape hatch so the OTP flow is testable without a working mailbox.
+    // Defaults to false anywhere ASPNETCORE_ENVIRONMENT isn't "Development" (incl. prod).
+    private static bool IsDevelopment =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+            "Development", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
+
+    /// <summary>Returns (rawCode, sha256-hex hash). 6 digits, uniform, crypto-random.</summary>
+    private static (string Raw, string Hash) GenerateOtp()
+    {
+        var raw = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+        return (raw, HashOtp(raw));
+    }
+
+    private static string HashOtp(string code)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(code));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Best-effort EMAIL_VERIFICATION send (Email channel only — no user/in-app inbox
+    /// exists yet). Failures are logged, not thrown: the pending row still exists, the
+    /// code can be resent, and the processor's pending-grace poller re-drives any
+    /// RabbitMQ hiccup.
+    /// </summary>
+    private async Task SendVerificationEmailAsync(PendingRegistration reg, string rawCode, CancellationToken ct)
+    {
+        try
+        {
+            await notifications.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "EMAIL_VERIFICATION",
+                UserId:       null,
+                Payload:      new Dictionary<string, object>
+                {
+                    ["FirstName"]     = FirstName(reg.Name),
+                    ["Code"]          = rawCode,
+                    ["ExpiryMinutes"] = (int)OtpLifetime.TotalMinutes,
+                },
+                Recipients: new[]
+                {
+                    new NotificationRecipientDto(NotificationChannel.Email, reg.Email),
+                }), ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "EMAIL_VERIFICATION send failed for {Email}; pending row kept, code can be resent.", reg.Email);
+        }
     }
 
     /// <summary>

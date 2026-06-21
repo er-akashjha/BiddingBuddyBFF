@@ -87,6 +87,32 @@ public class OrganizationInviteConfiguration : IEntityTypeConfiguration<Organiza
     }
 }
 
+public class PendingRegistrationConfiguration : IEntityTypeConfiguration<PendingRegistration>
+{
+    public void Configure(EntityTypeBuilder<PendingRegistration> b)
+    {
+        b.ToTable("pending_registrations");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.Email).HasColumnName("email").IsRequired();
+        b.Property(x => x.Name).HasColumnName("name").IsRequired();
+        b.Property(x => x.PasswordHash).HasColumnName("password_hash").IsRequired();
+        b.Property(x => x.OrgName).HasColumnName("org_name");
+        b.Property(x => x.Phone).HasColumnName("phone");
+        b.Property(x => x.InviteToken).HasColumnName("invite_token");
+        b.Property(x => x.CodeHash).HasColumnName("code_hash").IsRequired();
+        b.Property(x => x.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
+        b.Property(x => x.ResendCount).HasColumnName("resend_count").HasDefaultValue(0);
+        b.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+        b.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+        // The partial unique "one active pending row per email" (WHERE consumed_at IS NULL)
+        // lives in the SQL migration — EF Core can't model a partial index in the fluent API.
+        b.HasIndex(x => x.Email);
+    }
+}
+
 public class BidCommentConfiguration : IEntityTypeConfiguration<BidComment>
 {
     public void Configure(EntityTypeBuilder<BidComment> b)

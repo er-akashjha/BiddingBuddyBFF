@@ -71,6 +71,30 @@ CREATE TABLE refresh_tokens (
 CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens (user_id);
 CREATE INDEX idx_refresh_tokens_hash    ON refresh_tokens (token_hash);
 
+-- Verify-first signup: stashes BCrypt-hashed credentials + an OTP hash until the
+-- email is verified, at which point the real user + org are created. See migration
+-- 0006. A partial unique index keeps one active (un-consumed) row per email.
+CREATE TABLE pending_registrations (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         TEXT        NOT NULL,
+  name          TEXT        NOT NULL,
+  password_hash TEXT        NOT NULL,
+  org_name      TEXT,
+  phone         TEXT,
+  invite_token  TEXT,
+  code_hash     TEXT        NOT NULL,
+  attempt_count INTEGER     NOT NULL DEFAULT 0,
+  resend_count  INTEGER     NOT NULL DEFAULT 0,
+  expires_at    TIMESTAMPTZ NOT NULL,
+  consumed_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX ix_pending_reg_email ON pending_registrations (email);
+CREATE UNIQUE INDEX uq_pending_reg_one_active_per_email
+  ON pending_registrations (email) WHERE consumed_at IS NULL;
+
 -- ─────────────────────────────────────────────────────────────────
 -- 2. ORGANIZATIONS & MEMBERS
 -- ─────────────────────────────────────────────────────────────────

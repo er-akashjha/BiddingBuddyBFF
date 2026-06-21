@@ -17,26 +17,71 @@ public class AuthController(
 {
     private static readonly HashSet<string> SupportedProviders = ["google", "github"];
 
-    /// <summary>Register a new user with email and password.</summary>
+    /// <summary>
+    /// Begin a password signup. Sends a 6-digit verification code to the email and
+    /// returns 202 — the account is created only after the code is confirmed via
+    /// <c>POST /api/auth/verify-email</c>.
+    /// </summary>
     [HttpPost("register")]
-    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(RegistrationPendingDto), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Register([FromBody] RegisterDto dto, CancellationToken ct)
     {
         try
         {
-            var tokens = await authService.RegisterAsync(dto, ct);
-            return StatusCode(201, tokens);
+            var result = await authService.StartRegistrationAsync(dto, ct);
+            return StatusCode(StatusCodes.Status202Accepted, result);
         }
         catch (ArgumentException ex)
         {
+            // Covers password-too-short and INVITE_INVALID.
             return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex) when (ex.Message == "EMAIL_EXISTS")
         {
             return Conflict(new { error = "Email already registered." });
         }
+    }
+
+    /// <summary>Confirm a signup's 6-digit code → creates the account and returns tokens.</summary>
+    [HttpPost("verify-email")]
+    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailDto dto, CancellationToken ct)
+    {
+        try
+        {
+            var tokens = await authService.VerifyEmailAsync(dto, ct);
+            return Ok(tokens);
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "TOO_MANY_ATTEMPTS")
+        {
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "EMAIL_EXISTS")
+        {
+            return Conflict(new { error = "Email already registered." });
+        }
+        catch (InvalidOperationException ex)   // CODE_INVALID (wrong/expired/unknown)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)            // INVITE_INVALID re-checked at consume time
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Re-send the verification code for a pending signup. Always 204 (no enumeration).</summary>
+    [HttpPost("resend-verification")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> ResendVerification([FromBody] ResendVerificationDto dto, CancellationToken ct)
+    {
+        await authService.ResendVerificationAsync(dto.Email, ct);
+        return NoContent();
     }
 
     /// <summary>Login with email and password. Returns access + refresh tokens.</summary>
