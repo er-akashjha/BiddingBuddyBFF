@@ -65,8 +65,12 @@ public static class InfrastructureServiceExtensions
 
         services.AddScoped<ITenderFileStorage, TenderFileStorage>();
 
+        // Forwards the ambient correlation id as X-Correlation-Id on outbound calls.
+        services.AddTransient<Logging.CorrelationHeaderHandler>();
+
         // Typed HTTP client — BiddingBuddyServices (MongoDB internal API, Basic auth)
-        services.AddHttpClient<IBiddingBuddyServicesClient, BiddingBuddyServicesClient>();
+        services.AddHttpClient<IBiddingBuddyServicesClient, BiddingBuddyServicesClient>()
+            .AddHttpMessageHandler<Logging.CorrelationHeaderHandler>();
 
         // Repositories
         services.AddScoped<IUserRepository, UserRepository>();

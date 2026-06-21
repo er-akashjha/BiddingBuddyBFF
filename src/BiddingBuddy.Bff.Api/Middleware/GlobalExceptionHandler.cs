@@ -16,8 +16,12 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             _                          => (StatusCodes.Status500InternalServerError, "Internal Server Error"),
         };
 
-        if (status == StatusCodes.Status500InternalServerError)
-            logger.LogError(ex, "Unhandled exception");
+        // Log every handled failure, not just 500s — 4xx (auth, validation, not-found)
+        // were previously silent, hiding the most user-visible failures.
+        if (status >= StatusCodes.Status500InternalServerError)
+            logger.LogError(ex, "Request failed → {Status} {Title}", status, title);
+        else
+            logger.LogWarning(ex, "Request rejected → {Status} {Title}: {Detail}", status, title, ex.Message);
 
         ctx.Response.StatusCode = status;
         await ctx.Response.WriteAsJsonAsync(

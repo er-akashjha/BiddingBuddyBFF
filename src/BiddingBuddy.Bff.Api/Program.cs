@@ -8,8 +8,46 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Threading.RateLimiting;
+using Serilog;
+using Serilog.Events;
+
+// ── Bootstrap logger (captures errors before full config is ready) ────────────
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
+
+try
+{
+    Log.Information("[BiddingBuddyBFF] Starting up…");
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ── Serilog ─────────────────────────────────────────────────────────────────
+// Shared console + file template across all five services so a single Loki
+// `pattern` parser can extract level / app / correlation id from every line.
+builder.Host.UseSerilog((ctx, _, cfg) =>
+{
+    var logPath = ctx.Configuration["Logging:FilePath"]
+                  ?? "logs/biddingbuddy/pipeline-.log";
+    cfg
+        .MinimumLevel.Information()
+        .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+        .MinimumLevel.Override("System",    LogEventLevel.Warning)
+        .Enrich.FromLogContext()
+        .Enrich.WithProperty("ApplicationName", "BiddingBuddyBFF")
+        .Enrich.WithProperty("MachineName", Environment.MachineName)
+        .WriteTo.Console(
+            outputTemplate:
+                "[{Timestamp:HH:mm:ss} {Level:u3}] [{ApplicationName}] [cid:{CorrelationId,-36}] {Message:lj}{NewLine}{Exception}")
+        .WriteTo.File(
+            path: logPath,
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 30,
+            shared: true,
+            outputTemplate:
+                "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] [{Level:u3}] [{ApplicationName}] [cid:{CorrelationId}] {Message:lj}{NewLine}{Exception}");
+});
 
 // ── Domain + Infrastructure ───────────────────────────────────────────────────
 builder.Services
@@ -132,6 +170,14 @@ builder.Services.AddExceptionHandler<BiddingBuddy.Bff.Api.Middleware.GlobalExcep
 // ── Build ─────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
+// Correlation id must come first — before anything else logs — so every entry
+// produced during the request (and the request-logging summary below) carries it.
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+// One structured line per request: method, path, status, elapsed ms. This alone
+// surfaces the 4xx/5xx that were previously invisible.
+app.UseSerilogRequestLogging();
+
 // Swagger available in all environments (restrict via reverse proxy in prod if needed)
 app.UseSwagger();
 app.UseSwaggerUI(c =>
@@ -152,3 +198,12 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "[BiddingBuddyBFF] Host terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
