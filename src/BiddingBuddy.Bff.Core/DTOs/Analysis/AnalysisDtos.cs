@@ -23,6 +23,7 @@ public record KpisDto(
     int     BidsSubmitted,      // org's bids with stage in (submitted | won | lost) created in the period
     decimal WinRate,            // 0-100, wins / (wins + losses) for completed bids in the period
     decimal RevenueWon,         // sum(won_value) for bids that ended in 'won' in the period
+    decimal PipelineValue,      // sum(our_bid_value ?? tender_value) over all org bids not won/lost (current state, not period-scoped)
     DateTime From,
     DateTime To
 );

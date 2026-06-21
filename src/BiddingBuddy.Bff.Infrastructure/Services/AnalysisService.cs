@@ -79,7 +79,14 @@ public class AnalysisService(BffDbContext db) : IAnalysisService
             .Where(b => b.Stage == "won")
             .SumAsync(b => (decimal?)b.WonValue, ct) ?? 0m;
 
-        return new KpisDto(tendersAnalyzed, bidsSubmitted, winRate, revenueWon, from, to);
+        // Open pipeline — value of every org bid not yet won/lost. This is current
+        // state, NOT period-scoped: a still-active bid created before `from` is part
+        // of the live pipeline. Per bid, prefer our quoted value, else the tender value.
+        var pipelineValue = await db.Bids
+            .Where(b => b.OrgId == orgId && b.Stage != "won" && b.Stage != "lost")
+            .SumAsync(b => b.OurBidValue ?? b.TenderValue ?? 0m, ct);
+
+        return new KpisDto(tendersAnalyzed, bidsSubmitted, winRate, revenueWon, pipelineValue, from, to);
     }
 
     public async Task<DashboardDto> GetDashboardAsync(Guid orgId, DateTime from, DateTime to, CancellationToken ct = default)
