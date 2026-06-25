@@ -54,6 +54,9 @@ builder.Services
     .AddCoreServices()
     .AddInfrastructure(builder.Configuration);
 
+// Scheduled tender-alert scan — turns newly-added tenders into per-org digest emails.
+builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.TenderMatchScanWorker>();
+
 // ── JWT Authentication ────────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is not configured.");

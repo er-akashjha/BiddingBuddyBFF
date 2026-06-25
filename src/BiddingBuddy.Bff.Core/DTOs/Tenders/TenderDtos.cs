@@ -76,7 +76,10 @@ public record TenderSourceDocumentDto(
     string DocumentId,
     string? Type,
     string? FileName,
-    bool HasStoredKey
+    bool HasStoredKey,
+    // Direct external URL on the source platform (GeM). Set for display-only buyer
+    // attachments; null for files stored in our S3 (downloaded via the presign endpoint).
+    string? Url = null
 );
 
 public record TenderDocumentDto(

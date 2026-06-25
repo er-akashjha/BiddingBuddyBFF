@@ -62,7 +62,8 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                         DocumentId:   d.DocumentId!,
                         Type:         d.Type,
                         FileName:     d.FileName,
-                        HasStoredKey: !string.IsNullOrWhiteSpace(d.S3Key)))
+                        HasStoredKey: !string.IsNullOrWhiteSpace(d.S3Key),
+                        Url:          string.IsNullOrWhiteSpace(d.Url) ? null : d.Url))
                     .ToList(),
                 Timeline:         tender.Timeline);
         }

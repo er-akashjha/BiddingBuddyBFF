@@ -98,6 +98,7 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IGemIntegrationService, GemIntegrationService>();
         services.AddScoped<ITenderAlertRuleService, TenderAlertRuleService>();
         services.AddScoped<IMatchingService, MatchingService>();
+        services.Configure<MatchingScanOptions>(config.GetSection(MatchingScanOptions.Section));
         services.AddScoped<IInternalPipelineService, InternalPipelineService>();
 
         // Schema migrator (runs embedded SQL scripts via /internal/migrations)

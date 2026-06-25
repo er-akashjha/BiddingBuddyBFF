@@ -30,6 +30,10 @@ public class Tender
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    // Set once the scheduled tender-alert scan has evaluated this tender against
+    // interest rules. NULL = not yet evaluated (the scan's work-list).
+    public DateTime? AlertsScannedAt { get; set; }
+
     public ICollection<TenderDocument> Documents { get; set; } = [];
     public ICollection<OrgTenderSettings> OrgSettings { get; set; } = [];
     public AiAnalysisResult? AiAnalysis { get; set; }

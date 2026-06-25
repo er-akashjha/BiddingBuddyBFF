@@ -37,6 +37,7 @@ public class TenderConfiguration : IEntityTypeConfiguration<Tender>
         b.Property(x => x.Source).HasColumnName("source").HasDefaultValue("gem_pipeline");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.AlertsScannedAt).HasColumnName("alerts_scanned_at");
 
         b.HasIndex(x => x.GemTenderId).IsUnique();
         b.HasIndex(x => x.ClosingDate);
