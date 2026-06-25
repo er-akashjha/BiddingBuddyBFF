@@ -19,6 +19,10 @@ public class MatchingService(
     private static readonly string[] DefaultRoles = ["owner", "admin", "bid_manager"];
     private const int DefaultDigestSize = 10;
 
+    // Single-flight guard so the scheduled worker and a manual /internal/matching/scan
+    // never run concurrently within this process (which would double-send digests).
+    private static readonly SemaphoreSlim ScanGate = new(1, 1);
+
     private string FrontendBaseUrl => (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
 
     public async Task OnTenderUpsertedAsync(Guid tenderId, CancellationToken ct = default)
@@ -88,6 +92,116 @@ public class MatchingService(
         return delivered;
     }
 
+    // ── Scheduled scan: new tenders → per-org digests ──────────────────────────
+
+    public async Task<TenderScanResult> ScanNewTendersAsync(int batchSize, bool rearmFirst = false, CancellationToken ct = default)
+    {
+        if (batchSize <= 0) batchSize = 200;
+
+        // One scan at a time per process (worker vs. manual trigger vs. itself).
+        if (!await ScanGate.WaitAsync(0, ct))
+        {
+            log.LogInformation("[Match] Scan skipped — another scan is already running.");
+            return new TenderScanResult(0, 0, 0, Skipped: true);
+        }
+
+        try
+        {
+            if (rearmFirst)
+            {
+                var rearmed = await db.Database.ExecuteSqlRawAsync(
+                    "UPDATE tenders SET alerts_scanned_at = NULL WHERE alerts_scanned_at IS NOT NULL", ct);
+                log.LogWarning("[Match] Backfill requested — re-armed {Count} tender(s) for re-evaluation.", rearmed);
+            }
+
+            var rules = await db.TenderAlertRules.Where(r => r.IsActive).ToListAsync(ct);
+            var disabledOrgs = (await db.OrgAlertSettings
+                .Where(s => !s.IsEnabled).Select(s => s.OrgId).ToListAsync(ct)).ToHashSet();
+
+            int scanned = 0, matchesCreated = 0, orgsNotified = 0;
+
+            while (!ct.IsCancellationRequested)
+            {
+                // Oldest unscanned tenders first — these are the "newly added" rows.
+                var batch = await db.Tenders
+                    .Where(t => t.AlertsScannedAt == null)
+                    .OrderBy(t => t.CreatedAt)
+                    .Take(batchSize)
+                    .ToListAsync(ct);
+                if (batch.Count == 0) break;
+
+                // Build org → matched tenders, deduped per org across rules.
+                var byOrg = new Dictionary<Guid, List<Tender>>();
+                var ruleFor = new Dictionary<(Guid Org, Guid Tender), Guid>();
+
+                foreach (var tender in batch)
+                {
+                    if (!IsLive(tender.Status, tender.ClosingDate)) continue;
+                    foreach (var rule in rules)
+                    {
+                        if (disabledOrgs.Contains(rule.OrgId)) continue;
+                        if (ruleFor.ContainsKey((rule.OrgId, tender.Id))) continue;   // org already matched this tender
+                        if (!Matches(tender, rule)) continue;
+
+                        ruleFor[(rule.OrgId, tender.Id)] = rule.Id;
+                        if (!byOrg.TryGetValue(rule.OrgId, out var list)) { list = []; byOrg[rule.OrgId] = list; }
+                        list.Add(tender);
+                    }
+                }
+
+                // Record match rows (idempotent: skip any already present for the org).
+                foreach (var (orgId, matched) in byOrg)
+                {
+                    var ids = matched.Select(t => t.Id).ToList();
+                    var existing = (await db.TenderMatches
+                        .Where(m => m.OrgId == orgId && ids.Contains(m.TenderId))
+                        .Select(m => m.TenderId).ToListAsync(ct)).ToHashSet();
+
+                    var batchId = Guid.NewGuid();
+                    foreach (var t in matched.Where(t => !existing.Contains(t.Id)))
+                    {
+                        db.TenderMatches.Add(new TenderMatch
+                        {
+                            OrgId    = orgId,
+                            TenderId = t.Id,
+                            RuleId   = ruleFor[(orgId, t.Id)],
+                            Status   = "sent",
+                            BatchId  = batchId,
+                            SentAt   = DateTime.UtcNow,
+                        });
+                        matchesCreated++;
+                    }
+                }
+
+                // Stamp the whole batch scanned (matched or not), then persist — must be
+                // saved before dispatch since the publisher shares this DbContext.
+                foreach (var t in batch) t.AlertsScannedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                scanned += batch.Count;
+
+                // One digest per matched org for this batch.
+                foreach (var (orgId, matched) in byOrg)
+                {
+                    var settings = await db.OrgAlertSettings.FirstOrDefaultAsync(s => s.OrgId == orgId, ct);
+                    var channels = settings?.NotifyChannels ?? DefaultChannels;
+                    var roles    = settings?.NotifyRoles ?? DefaultRoles;
+                    if (await DispatchDigestAsync(orgId, matched, channels, roles, ct))
+                        orgsNotified++;
+                }
+
+                if (batch.Count < batchSize) break;   // last (partial) page
+            }
+
+            log.LogInformation("[Match] Scan complete — {Scanned} scanned, {Matches} new match(es), {Orgs} org-digest(s) sent.",
+                scanned, matchesCreated, orgsNotified);
+            return new TenderScanResult(scanned, matchesCreated, orgsNotified, Skipped: false);
+        }
+        finally
+        {
+            ScanGate.Release();
+        }
+    }
+
     // ── Flush a single org's buffer ────────────────────────────────────────────
 
     private async Task<bool> FlushOrgAsync(Guid orgId, bool force, CancellationToken ct)
@@ -129,6 +243,26 @@ public class MatchingService(
             return false;
         }
 
+        // Mark this batch sent BEFORE dispatching: the publisher shares our DbContext
+        // and commits its own transaction, so our change-tracker must be clean first.
+        var batchId = Guid.NewGuid();
+        foreach (var p in live) { p.Match.Status = "sent"; p.Match.BatchId = batchId; p.Match.SentAt = DateTime.UtcNow; }
+        await db.SaveChangesAsync(ct);
+
+        await DispatchDigestAsync(orgId, live.Select(p => p.Tender).ToList(), channels, roles, ct);
+
+        log.LogInformation("[Match] Flushed digest for org {OrgId}: {Count} tenders", orgId, live.Count);
+        return true;
+    }
+
+    // ── Dispatch one grouped digest to an org's recipients ─────────────────────
+    // Shared by the time-fallback flush and the scheduled scan. Tenders are ordered
+    // soonest-closing-first for delivery. Returns true if the org had ≥1 recipient.
+    private async Task<bool> DispatchDigestAsync(
+        Guid orgId, IReadOnlyList<Tender> tenders, string[] channels, string[] roles, CancellationToken ct)
+    {
+        if (tenders.Count == 0) return false;
+
         var recipients = await db.OrgMembers
             .Where(m => m.OrgId == orgId && m.Status == "active" && roles.Contains(m.Role))
             .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.Email, u.Name })
@@ -136,18 +270,18 @@ public class MatchingService(
             .Distinct()
             .ToListAsync(ct);
 
-        var batchId = Guid.NewGuid();
-        var tenders = live.Select(p => (object)new Dictionary<string, object?>
+        var ordered = tenders.OrderBy(t => t.ClosingDate ?? DateOnly.MaxValue).ToList();
+        var tenderPayload = ordered.Select(t => (object)new Dictionary<string, object?>
         {
-            ["Title"]       = p.Tender.Title,
-            ["Category"]    = p.Tender.Category ?? "",
-            ["State"]       = p.Tender.State ?? "",
-            ["Value"]       = p.Tender.TenderValue?.ToString("N0"),
-            ["ClosingDate"] = p.Tender.ClosingDate?.ToString("dd MMM yyyy") ?? "—",
-            ["Url"]         = $"{FrontendBaseUrl}/tenders/{p.Tender.Id}",
+            ["Title"]       = t.Title,
+            ["Category"]    = t.Category ?? "",
+            ["State"]       = t.State ?? "",
+            ["Value"]       = t.TenderValue?.ToString("N0"),
+            ["ClosingDate"] = t.ClosingDate?.ToString("dd MMM yyyy") ?? "—",
+            ["Url"]         = $"{FrontendBaseUrl}/tenders/{t.Id}",
         }).ToList();
 
-        var firstTitle = live[0].Tender.Title;
+        var firstTitle = ordered[0].Title;
         var allUrl = $"{FrontendBaseUrl}/tenders?matched=1";
 
         foreach (var r in recipients)
@@ -162,10 +296,10 @@ public class MatchingService(
             var payload = new Dictionary<string, object>
             {
                 ["FirstName"]  = FirstNameOf(r.Name),
-                ["Count"]      = live.Count,
-                ["One"]        = live.Count == 1,
+                ["Count"]      = ordered.Count,
+                ["One"]        = ordered.Count == 1,
                 ["FirstTitle"] = firstTitle,
-                ["Tenders"]    = tenders,
+                ["Tenders"]    = tenderPayload,
                 ["AllUrl"]     = allUrl,
             };
 
@@ -186,15 +320,10 @@ public class MatchingService(
         }
 
         if (recipients.Count == 0)
-            log.LogWarning("[Match] Org {OrgId} has {Count} matched tenders but no recipients in roles [{Roles}] — marking sent",
-                orgId, live.Count, string.Join(",", roles));
+            log.LogWarning("[Match] Org {OrgId} matched {Count} tenders but has no recipients in roles [{Roles}] — nothing sent",
+                orgId, ordered.Count, string.Join(",", roles));
 
-        foreach (var p in live) { p.Match.Status = "sent"; p.Match.BatchId = batchId; p.Match.SentAt = DateTime.UtcNow; }
-        await db.SaveChangesAsync(ct);
-
-        log.LogInformation("[Match] Flushed digest for org {OrgId}: {Count} tenders to {Recipients} recipient(s)",
-            orgId, live.Count, recipients.Count);
-        return true;
+        return recipients.Count > 0;
     }
 
     // ── Predicate ──────────────────────────────────────────────────────────────

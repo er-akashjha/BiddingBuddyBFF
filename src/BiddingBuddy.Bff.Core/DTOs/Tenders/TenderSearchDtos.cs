@@ -128,7 +128,7 @@ public record TenderStatusDto(
     bool    IsCancelled
 );
 
-public record TenderDocumentRefDto(string? Type, string? FileName, string? DocumentId, string? S3Bucket, string? S3Key);
+public record TenderDocumentRefDto(string? Type, string? FileName, string? DocumentId, string? S3Bucket, string? S3Key, string? Url = null);
 
 public record TenderTechSpecDto(string? Group, string? Name, string? Value);
 

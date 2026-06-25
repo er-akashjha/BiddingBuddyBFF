@@ -1,0 +1,16 @@
+[2026-06-21 23:22:07.523] [WRN] [BiddingBuddyBFF] [cid:6b1d6634-5548-491f-8536-2162743fdaef] Failed to determine the https port for redirect.
+[2026-06-21 23:22:07.813] [INF] [BiddingBuddyBFF] [cid:6b1d6634-5548-491f-8536-2162743fdaef] HTTP GET / responded 404 in 375.5519 ms
+[2026-06-21 23:22:45.858] [INF] [BiddingBuddyBFF] [cid:ddd9a615-4a50-4a2f-917a-0387f10392df] HTTP OPTIONS /api/auth/me responded 204 in 6.8668 ms
+[2026-06-21 23:22:45.914] [INF] [BiddingBuddyBFF] [cid:85e732f7-32ed-4da0-b687-5fcda58a1bbe] HTTP GET /api/auth/me responded 401 in 47.4491 ms
+[2026-06-21 23:22:47.169] [INF] [BiddingBuddyBFF] [cid:1d0b8cfb-78aa-4c16-8e1d-816479f11edf] HTTP GET /api/auth/me responded 401 in 15.2943 ms
+[2026-06-21 23:22:49.150] [INF] [BiddingBuddyBFF] [cid:6479f5e8-93e6-495b-93c2-ccba32d0c141] HTTP GET /api/auth/me responded 401 in 2.7058 ms
+[2026-06-21 23:23:20.369] [INF] [BiddingBuddyBFF] [cid:eeb6d0d0-b6ed-4116-b579-4f701586064e] HTTP OPTIONS /api/auth/me responded 204 in 0.2208 ms
+[2026-06-21 23:23:20.372] [INF] [BiddingBuddyBFF] [cid:4eae0c16-f647-44f2-9365-4f3f96a6905d] HTTP GET /api/auth/me responded 401 in 0.8880 ms
+[2026-06-21 23:25:24.195] [INF] [BiddingBuddyBFF] [cid:81339d2e-e9b3-4a4a-be4f-4d525e47eb48] HTTP OPTIONS /api/auth/me responded 204 in 0.2492 ms
+[2026-06-21 23:25:24.199] [INF] [BiddingBuddyBFF] [cid:6d8c70c4-9a3c-4591-9cf6-9b1a34e0d58c] HTTP GET /api/auth/me responded 401 in 1.2125 ms
+[2026-06-21 23:25:25.151] [INF] [BiddingBuddyBFF] [cid:75c0a595-e35e-4bb6-ace1-c19482bd02bc] HTTP GET /api/auth/me responded 401 in 0.8518 ms
+[2026-06-21 23:25:27.151] [INF] [BiddingBuddyBFF] [cid:5c5c94fc-b91c-4e44-9b22-bc7d5ea3cb4e] HTTP GET /api/auth/me responded 401 in 0.8059 ms
+[2026-06-21 23:29:35.996] [INF] [BiddingBuddyBFF] [cid:1ac26e45-7dd5-4f95-87d9-35af66883fe5] HTTP OPTIONS /api/auth/me responded 204 in 0.6765 ms
+[2026-06-21 23:29:36.003] [INF] [BiddingBuddyBFF] [cid:b41f8e03-45a6-4516-8868-c1758beb9232] HTTP GET /api/auth/me responded 401 in 0.9850 ms
+[2026-06-21 23:29:36.582] [INF] [BiddingBuddyBFF] [cid:20358402-7e96-49fa-be58-bb7f223479e6] HTTP GET /api/auth/me responded 401 in 0.9853 ms
+[2026-06-21 23:29:37.600] [INF] [BiddingBuddyBFF] [cid:f3fe0735-795c-4ef0-86e4-d23c4b24a3f0] HTTP GET /api/auth/me responded 401 in 0.8547 ms

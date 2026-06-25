@@ -97,7 +97,7 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 ### Internal (API-key only — `X-Api-Key` header, bypasses org middleware)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/internal/tenders` | Upsert enriched tender from BidProcessor (also runs interest matching — see Tender-match digests) |
+| POST | `/internal/tenders` | Upsert enriched tender from BidProcessor (matching is decoupled — see Tender-match digests) |
 | POST | `/internal/tenders/{gemTenderId}/documents` | Store extracted document text |
 | POST | `/internal/competitors` | Record competitor bid observation |
 | POST | `/internal/analysis` | Store AI analysis results |
@@ -105,7 +105,8 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | POST | `/internal/migrations` | Apply all pending migrations (idempotent — see DbMigrator below) |
 | GET/POST/PATCH/DELETE | `/internal/notification-templates[/{id}]` | Admin CRUD over `notification_templates` (global config — see Notification subsystem) |
 | POST | `/internal/notifications` | Trigger a notification dispatch from outside the BFF (BidProcessor, admin tools). In-BFF flows call `INotificationPublisher` directly. |
-| POST | `/internal/digests/flush` | Time-fallback flush of buffered tender matches (drive on a daily schedule — see Tender-match digests) |
+| POST | `/internal/digests/flush` | Legacy time-fallback flush of any still-`pending` tender matches (now a no-op safety net — see Tender-match digests) |
+| POST | `/internal/matching/scan` | Run the tender-alert scan now: evaluate not-yet-scanned tenders → one digest per matched org. `?backfill=true` re-arms all tenders first. Same logic as the scheduled `TenderMatchScanWorker`. |
 
 ## Auth Design
 
@@ -335,7 +336,7 @@ Local dev: `dotnet user-secrets set "R2:AccessKeyId" "..." --project src/Bidding
 ```json
 [
   {
-    "AllowedOrigins": ["http://localhost:3000", "https://app.biddingbuddy.com"],
+    "AllowedOrigins": ["http://localhost:3000", "https://tendersagent.com"],
     "AllowedMethods": ["PUT", "GET"],
     "AllowedHeaders": ["Content-Type"],
     "ExposeHeaders": ["ETag"],
@@ -515,27 +516,40 @@ them as a **batched digest** (a group of tenders per email, not one-per-tender).
 
 ### Flow
 
-```
-POST /internal/tenders (from EnrichBidWorker)
-  └─ InternalPipelineService.UpsertTenderAsync
-       └─ MatchingService.OnTenderUpsertedAsync   (best-effort; never fails the upsert)
-            1. test live tender against every active rule → matched orgs
-            2. insert tender_matches (pending), deduped by (org, tender)
-            3. count-trigger: if an org's pending count ≥ its digest_size → flush now
-                 - order soonest-closing-deadline first, expire stale matches
-                 - resolve recipients (org members in notify_roles)
-                 - INotificationPublisher.SendAsync("TENDER_MATCH") per recipient (Email + InApp)
-                 - mark the batch sent
+Alerting is **decoupled from ingestion** and driven by a scheduled scan (migration
+`0008` adds the `tenders.alerts_scanned_at` marker). The old inline on-upsert
+matching + count-trigger digest was removed.
 
-POST /internal/digests/flush  (daily schedule)
-  └─ MatchingService.FlushAllDueAsync — time-fallback: flush every org with
-     pending matches regardless of digest_size; expire matches past deadline.
 ```
+Ingestion (no longer triggers matching):
+POST /internal/tenders (from EnrichBidWorker)
+  └─ InternalPipelineService.UpsertTenderAsync — upsert only; new rows get alerts_scanned_at = NULL.
+
+Alerting (primary path — the scheduled scan):
+TenderMatchScanWorker  (every Matching:ScanIntervalSeconds, default 15m) ─┐
+POST /internal/matching/scan  (manual / external scheduler)             ─┴─ MatchingService.ScanNewTendersAsync
+     1. pull tenders WHERE alerts_scanned_at IS NULL (oldest first), in batches
+     2. test each LIVE tender against every active rule → org → matched tenders
+        (deduped per org across rules; disabled orgs skipped)
+     3. insert tender_matches (status 'sent', deduped by UNIQUE(org,tender))
+     4. stamp the batch alerts_scanned_at = now()  → never re-picked (idempotent)
+     5. one digest per matched org → INotificationPublisher.SendAsync("TENDER_MATCH")
+        (Email + InApp, soonest-closing first, recipients = active org members in notify_roles)
+
+POST /internal/digests/flush  (legacy safety net)
+  └─ MatchingService.FlushAllDueAsync — flushes any still-'pending' matches. The scan
+     sends immediately, so there is normally no 'pending' backlog → effectively a no-op.
+```
+
+Dedup is layered: per-org in a run (a tender matching 2 rules is queued once) ·
+`alerts_scanned_at` (a tender is evaluated once, ever) · `tender_matches`
+UNIQUE(org,tender) (DB guard). Concurrent runs are gated by an in-process semaphore.
 
 - **Template:** `TENDER_MATCH` (Email + InApp), seeded by migration `0004`. Payload is `{ FirstName, Count, One, FirstTitle, Tenders[]{Title,Category,State,Value,ClosingDate,Url}, AllUrl }` — the Email body iterates `{{#each Tenders}}`.
 - **Why in the BFF:** rules (Postgres), org/user data, and `INotificationPublisher` all live here, so matching is one in-process step off the existing `/internal/tenders` upsert — no extra pipeline plumbing.
-- **Services:** `ITenderAlertRuleService` (CRUD + settings), `IMatchingService` (matching + flush). UI: SettingsPage → **Interests** tab.
-- **Go-live:** apply migration `0004`; ensure BidProcessor `BffInternalApi:ApiKey` matches `Pipeline:ApiKey`; schedule `POST /internal/digests/flush` daily.
+- **Matching semantics:** within a field = OR (`categories [laptop, server]`), across fields = AND. Categories/states match **exactly** (case-insensitive); keywords are substring over title/description/summary/tags. Multiple rules per org = OR. Surfaced in the Interests-tab copy.
+- **Services:** `ITenderAlertRuleService` (CRUD + settings), `IMatchingService` (`ScanNewTendersAsync` scheduled scan + `FlushAllDueAsync` legacy fallback). Worker: `TenderMatchScanWorker` (config `Matching:*`). UI: SettingsPage → **Interests** tab.
+- **Go-live:** apply migrations `0004` + `0008`; the scan runs in-process via `TenderMatchScanWorker` — no external cron required (or drive `POST /internal/matching/scan` instead). `0008` marks all existing tenders scanned so the first run won't blast the backlog; use `?backfill=true` for a deliberate one-time backfill. Ensure BidProcessor `BffInternalApi:ApiKey` matches `Pipeline:ApiKey` so tenders actually reach Postgres to be matched.
 
 ## Key Reference
 
