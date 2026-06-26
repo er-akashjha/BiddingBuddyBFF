@@ -65,7 +65,10 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                         HasStoredKey: !string.IsNullOrWhiteSpace(d.S3Key),
                         Url:          string.IsNullOrWhiteSpace(d.Url) ? null : d.Url))
                     .ToList(),
-                Timeline:         tender.Timeline);
+                Timeline:         tender.Timeline,
+                // Global enrichment status flows through; AiUnlocked is decided per-org
+                // by the controller (which has CurrentOrgId) — defaults locked here.
+                EnrichmentStatus: tender.EnrichmentStatus);
         }
 
 
@@ -101,7 +104,8 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                     AiScore:       item.Ai?.OpportunityScore ?? 0,
                     WinProbability: 0,   // not available in TenderSearchItemDto
                     IsTracked:     false, // not available at this stage
-                    IsSaved:       false  // not available at this stage
+                    IsSaved:       false, // not available at this stage
+                    EnrichmentStatus: item.EnrichmentStatus
                 );
 
                 tenderList.Add(dto); // include all tenders regardless of title

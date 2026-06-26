@@ -275,6 +275,62 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
             ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
     }
 
+    public async Task<bool> SetEnrichmentStatusAsync(
+        string platform, string platformTenderId, string status,
+        IEnumerable<string>? allowedCurrent = null,
+        string? paidByOrg = null,
+        CancellationToken ct = default)
+    {
+        var body = new
+        {
+            platform,
+            platformTenderId,
+            status,
+            allowedCurrent = allowedCurrent?.ToArray(),
+            paidByOrg,
+        };
+
+        var json = JsonSerializer.Serialize(body, _json);
+
+        async Task<HttpResponseMessage> SendAsync()
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, "api/tenders/enrichment-status")
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
+            return await _http.SendAsync(req, ct);
+        }
+
+        var response = await SendAsync();
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            InvalidateToken();
+            response = await SendAsync();
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var respBody = await response.Content.ReadAsStringAsync(ct);
+            _log.LogWarning("BiddingBuddyServices enrichment-status {Status}: {Body}", (int)response.StatusCode, respBody);
+            throw new InvalidOperationException(
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {respBody}");
+        }
+
+        // Response shape: { "claimed": true|false }
+        try
+        {
+            using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            if (doc.RootElement.TryGetProperty("claimed", out var claimed))
+                return claimed.GetBoolean();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not parse enrichment-status response for {Pid}", platformTenderId);
+        }
+        return true;
+    }
+
     // ── token management ──────────────────────────────────────────────────────
 
     private async Task<string> GetTokenAsync(CancellationToken ct)

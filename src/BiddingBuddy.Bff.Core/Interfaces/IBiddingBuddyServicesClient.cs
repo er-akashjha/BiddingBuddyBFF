@@ -29,4 +29,17 @@ public interface IBiddingBuddyServicesClient
     /// </summary>
     Task<List<string>> GetTenderFacetOptionsAsync(
         string field, string? search, int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// Transition the Mongo tender's enrichment status (the authoritative state machine).
+    /// <paramref name="status"/> / <paramref name="allowedCurrent"/> are enum member names
+    /// (None/Extracted/Queued/Processing/Enriched/Failed). With <paramref name="allowedCurrent"/>
+    /// the update is an atomic claim — returns true only if a tender matched (the claim was
+    /// won), so the caller publishes the enrich message exactly once.
+    /// </summary>
+    Task<bool> SetEnrichmentStatusAsync(
+        string platform, string platformTenderId, string status,
+        IEnumerable<string>? allowedCurrent = null,
+        string? paidByOrg = null,
+        CancellationToken ct = default);
 }
