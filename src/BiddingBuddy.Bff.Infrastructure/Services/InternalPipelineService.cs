@@ -1,20 +1,38 @@
 using BiddingBuddy.Bff.Core.DTOs.Internal;
+using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
 // Interest matching is no longer triggered inline here — the scheduled
 // TenderMatchScanWorker (IMatchingService.ScanNewTendersAsync) picks up newly-added
 // tenders via the alerts_scanned_at flag and emails one digest per matched org.
-public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
+public class InternalPipelineService(
+    BffDbContext db,
+    INotificationPublisher publisher,
+    IConfiguration config,
+    ILogger<InternalPipelineService> log) : IInternalPipelineService
 {
+    // Roles that receive the "AI analysis ready" notification — mirrors the digest defaults.
+    private static readonly string[] NotifyRoles = ["owner", "admin", "bid_manager"];
+    private string FrontendBaseUrl => (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+
     public async Task<UpsertTenderResponseDto> UpsertTenderAsync(UpsertTenderDto dto, CancellationToken ct = default)
     {
         var existing = await db.Tenders
             .FirstOrDefaultAsync(t => t.GemTenderId == dto.GemTenderId, ct);
+
+        Guid tenderId;
+        bool created;
+        Tender entity;
+        // Did this upsert move the tender INTO the enriched state? Used to unlock every
+        // org that paid-and-queued. Computed before we mutate existing.EnrichmentStatus.
+        bool becameEnriched;
 
         if (existing is null)
         {
@@ -43,38 +61,144 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
                 AiSummary        = dto.AiSummary,
                 AiTags           = dto.AiTags,
                 RawData          = dto.RawData,
+                EnrichmentStatus = dto.EnrichmentStatus ?? "none",
             };
             db.Tenders.Add(tender);
             await db.SaveChangesAsync(ct);
-            return new UpsertTenderResponseDto(tender.Id, true);
+
+            becameEnriched = dto.EnrichmentStatus == "enriched";
+            tenderId = tender.Id;
+            created  = true;
+            entity   = tender;
+        }
+        else
+        {
+            existing.Title            = dto.Title;
+            existing.Description      = dto.Description ?? existing.Description;
+            existing.BuyerOrgName     = dto.BuyerOrgName ?? existing.BuyerOrgName;
+            existing.BuyerOrgIdGem    = dto.BuyerOrgIdGem ?? existing.BuyerOrgIdGem;
+            existing.State            = dto.State ?? existing.State;
+            existing.City             = dto.City ?? existing.City;
+            existing.Category         = dto.Category ?? existing.Category;
+            existing.SubCategory      = dto.SubCategory ?? existing.SubCategory;
+            existing.TenderValue      = dto.TenderValue ?? existing.TenderValue;
+            existing.EmdAmount        = dto.EmdAmount ?? existing.EmdAmount;
+            existing.PublishedDate    = dto.PublishedDate ?? existing.PublishedDate;
+            existing.ClosingDate      = dto.ClosingDate ?? existing.ClosingDate;
+            existing.DeliveryDays     = dto.DeliveryDays ?? existing.DeliveryDays;
+            existing.Status           = dto.Status ?? existing.Status;
+            existing.CorrigendumCount = dto.CorrigendumCount ?? existing.CorrigendumCount;
+            existing.AiScore          = dto.AiScore ?? existing.AiScore;
+            existing.EligibilityScore = dto.EligibilityScore ?? existing.EligibilityScore;
+            existing.WinProbability   = dto.WinProbability ?? existing.WinProbability;
+            existing.RiskScore        = dto.RiskScore ?? existing.RiskScore;
+            existing.AiSummary        = dto.AiSummary ?? existing.AiSummary;
+            existing.AiTags           = dto.AiTags ?? existing.AiTags;
+            if (dto.RawData is not null) existing.RawData = dto.RawData;
+
+            becameEnriched = dto.EnrichmentStatus == "enriched" && existing.EnrichmentStatus != "enriched";
+
+            // Apply the new status, but never let a raw re-projection ("extracted")
+            // downgrade an already-enriched tender.
+            if (dto.EnrichmentStatus is not null &&
+                !(existing.EnrichmentStatus == "enriched" && dto.EnrichmentStatus == "extracted"))
+            {
+                existing.EnrichmentStatus = dto.EnrichmentStatus;
+            }
+
+            await db.SaveChangesAsync(ct);
+
+            tenderId = existing.Id;
+            created  = false;
+            entity   = existing;
         }
 
-        existing.Title            = dto.Title;
-        existing.Description      = dto.Description ?? existing.Description;
-        existing.BuyerOrgName     = dto.BuyerOrgName ?? existing.BuyerOrgName;
-        existing.BuyerOrgIdGem    = dto.BuyerOrgIdGem ?? existing.BuyerOrgIdGem;
-        existing.State            = dto.State ?? existing.State;
-        existing.City             = dto.City ?? existing.City;
-        existing.Category         = dto.Category ?? existing.Category;
-        existing.SubCategory      = dto.SubCategory ?? existing.SubCategory;
-        existing.TenderValue      = dto.TenderValue ?? existing.TenderValue;
-        existing.EmdAmount        = dto.EmdAmount ?? existing.EmdAmount;
-        existing.PublishedDate    = dto.PublishedDate ?? existing.PublishedDate;
-        existing.ClosingDate      = dto.ClosingDate ?? existing.ClosingDate;
-        existing.DeliveryDays     = dto.DeliveryDays ?? existing.DeliveryDays;
-        existing.Status           = dto.Status ?? existing.Status;
-        existing.CorrigendumCount = dto.CorrigendumCount ?? existing.CorrigendumCount;
-        existing.AiScore          = dto.AiScore ?? existing.AiScore;
-        existing.EligibilityScore = dto.EligibilityScore ?? existing.EligibilityScore;
-        existing.WinProbability   = dto.WinProbability ?? existing.WinProbability;
-        existing.RiskScore        = dto.RiskScore ?? existing.RiskScore;
-        existing.AiSummary        = dto.AiSummary ?? existing.AiSummary;
-        existing.AiTags           = dto.AiTags ?? existing.AiTags;
-        if (dto.RawData is not null) existing.RawData = dto.RawData;
+        // Enrichment just completed → unlock every org that paid-and-queued for this
+        // tender, then email them. Idempotent (only flips 'pending' rows / sends once via
+        // enrichment_notified_at), so a repeated enriched mirror is a no-op the second time.
+        if (becameEnriched)
+        {
+            await db.TenderEnrichmentEntitlements
+                .Where(e => e.GemTenderId == dto.GemTenderId && e.Status == "pending")
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(e => e.Status, "unlocked")
+                    .SetProperty(e => e.UnlockedAt, DateTime.UtcNow), ct);
 
-        await db.SaveChangesAsync(ct);
-        return new UpsertTenderResponseDto(existing.Id, false);
+            await SendEnrichmentReadyAsync(entity, ct);
+        }
+
+        return new UpsertTenderResponseDto(tenderId, created);
     }
+
+    /// <summary>
+    /// Emails "your AI analysis is ready" to every org that funded this tender's
+    /// enrichment. No-op when no org paid (e.g. an auto-enriched tender during rollout)
+    /// or when already sent. Best-effort: a notification failure never fails the upsert.
+    /// </summary>
+    private async Task SendEnrichmentReadyAsync(Tender tender, CancellationToken ct)
+    {
+        // Idempotency: send at most once per tender.
+        if (tender.EnrichmentNotifiedAt is not null) return;
+
+        var orgIds = await db.TenderEnrichmentEntitlements
+            .Where(e => e.GemTenderId == tender.GemTenderId)
+            .Select(e => e.OrgId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        if (orgIds.Count > 0)
+        {
+            var url = $"{FrontendBaseUrl}/tenders/{tender.Id}";
+
+            foreach (var orgId in orgIds)
+            {
+                var recipients = await db.OrgMembers
+                    .Where(m => m.OrgId == orgId && m.Status == "active" && NotifyRoles.Contains(m.Role))
+                    .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.Email, u.Name })
+                    .Where(u => u.Email != null)
+                    .Distinct()
+                    .ToListAsync(ct);
+
+                foreach (var r in recipients)
+                {
+                    var payload = new Dictionary<string, object>
+                    {
+                        ["FirstName"] = FirstNameOf(r.Name),
+                        ["Title"]     = tender.Title,
+                        ["Category"]  = tender.Category ?? "",
+                        ["Url"]       = url,
+                    };
+
+                    try
+                    {
+                        await publisher.SendAsync(new SendNotificationDto(
+                            Category:     NotificationCategory.Information,
+                            TemplateCode: "TENDER_ENRICHMENT_READY",
+                            UserId:       r.Id,
+                            Payload:      payload,
+                            Recipients: new[]
+                            {
+                                new NotificationRecipientDto(NotificationChannel.Email, r.Email!),
+                                new NotificationRecipientDto(NotificationChannel.InApp, r.Id.ToString()),
+                            }), ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.LogWarning(ex,
+                            "[Enrich] Failed to send AI-ready notification to user {UserId} (org {OrgId})", r.Id, orgId);
+                    }
+                }
+            }
+        }
+
+        // Stamp notified even when there were no funding orgs/recipients, so we don't
+        // re-scan on every subsequent enriched mirror for this tender.
+        tender.EnrichmentNotifiedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static string FirstNameOf(string? fullName)
+        => string.IsNullOrWhiteSpace(fullName) ? "there" : fullName.Trim().Split(' ')[0];
 
     public async Task UpsertDocumentContentAsync(string gemTenderId, UpsertDocumentContentDto dto, CancellationToken ct = default)
     {

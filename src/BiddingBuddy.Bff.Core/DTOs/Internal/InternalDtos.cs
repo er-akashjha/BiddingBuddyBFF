@@ -23,7 +23,10 @@ public record UpsertTenderDto(
     int? RiskScore,
     string? AiSummary,
     string[]? AiTags,
-    string? RawData
+    string? RawData,
+    // Global enrichment lifecycle from the pipeline: "extracted" for the thin
+    // (raw) projection, "enriched" when AI data is included. Null = leave unchanged.
+    string? EnrichmentStatus = null
 );
 
 public record UpsertTenderResponseDto(Guid TenderId, bool Created);

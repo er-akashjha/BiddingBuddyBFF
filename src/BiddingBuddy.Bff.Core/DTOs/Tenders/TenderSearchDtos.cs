@@ -152,7 +152,10 @@ public record TenderSearchItemDto(
     IReadOnlyList<TenderDocumentRefDto>? Documents,
     IReadOnlyList<TenderTechSpecDto>?    TechnicalSpecifications,
     DateTime             CreatedAt,
-    DateTime             UpdatedAt
+    DateTime             UpdatedAt,
+    // Global AI-enrichment lifecycle from Mongo:
+    // none | extracted | queued | processing | enriched | failed
+    string?              EnrichmentStatus = null
 );
 
 /// <summary>Paged result wrapper returned by BiddingBuddyServices and forwarded to the client</summary>

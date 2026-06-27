@@ -23,6 +23,9 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();
     public DbSet<OrgTenderSettings> OrgTenderSettings => Set<OrgTenderSettings>();
 
+    // Pay-gated AI enrichment: per-org unlock entitlements
+    public DbSet<TenderEnrichmentEntitlement> TenderEnrichmentEntitlements => Set<TenderEnrichmentEntitlement>();
+
     // Tender-match digests (interests → buffered matches → grouped notification)
     public DbSet<TenderAlertRule> TenderAlertRules => Set<TenderAlertRule>();
     public DbSet<OrgAlertSettings> OrgAlertSettings => Set<OrgAlertSettings>();

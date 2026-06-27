@@ -194,6 +194,9 @@ CREATE TABLE tenders (
   ai_tags             TEXT[],
   raw_data            JSONB,
   source              TEXT NOT NULL DEFAULT 'gem_pipeline',
+  -- Global AI-enrichment lifecycle (migration 0010): none|extracted|queued|processing|enriched|failed
+  enrichment_status   TEXT NOT NULL DEFAULT 'none',
+  enrichment_notified_at TIMESTAMPTZ,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -204,10 +207,30 @@ CREATE INDEX idx_tenders_status      ON tenders (status);
 CREATE INDEX idx_tenders_category    ON tenders (category);
 CREATE INDEX idx_tenders_state       ON tenders (state);
 CREATE INDEX idx_tenders_ai_score    ON tenders (ai_score DESC);
+CREATE INDEX idx_tenders_enrichment_status ON tenders (enrichment_status);
 
 CREATE TRIGGER trg_tenders_updated_at
   BEFORE UPDATE ON tenders
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Per-org entitlement to view a tender's AI enrichment (migration 0010). Enrichment
+-- data is global (Mongo); access is sold per org. UNIQUE(org_id, gem_tender_id) makes
+-- an unlock idempotent + is the anti-double-charge guard.
+CREATE TABLE tender_enrichment_entitlements (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id              UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  gem_tender_id       TEXT NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'pending',   -- pending | unlocked | failed
+  source              TEXT NOT NULL DEFAULT 'grant',     -- grant | purchase | credit | plan
+  payment_ref         TEXT,
+  unlocked_by_user_id UUID,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  unlocked_at         TIMESTAMPTZ,
+  CONSTRAINT uq_enrichment_entitlement_org_tender UNIQUE (org_id, gem_tender_id)
+);
+
+CREATE INDEX idx_enrichment_entitlements_org ON tender_enrichment_entitlements (org_id);
+CREATE INDEX idx_enrichment_entitlements_gem ON tender_enrichment_entitlements (gem_tender_id);
 
 CREATE TABLE tender_documents (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

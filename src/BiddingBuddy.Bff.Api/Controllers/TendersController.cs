@@ -12,7 +12,8 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 public class TendersController(
     ITenderService tenderService,
     IBiddingBuddyServicesClient servicesClient,
-    ITenderFileStorage tenderFileStorage) : BffControllerBase
+    ITenderFileStorage tenderFileStorage,
+    IEnrichmentService enrichmentService) : BffControllerBase
 {
     /// <summary>Tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
     [HttpGet]
@@ -21,8 +22,11 @@ public class TendersController(
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> List([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
     {
-        var result = await servicesClient.SearchTendersAsync(query, ct);
-        return Ok(result);
+        var result   = await servicesClient.SearchTendersAsync(query, ct);
+        var unlocked = await enrichmentService.GetUnlockedSetAsync(
+            CurrentOrgId, result.Select(r => r.GemTenderId).ToList(), ct);
+        var masked = result.Select(r => MaskListItem(r, unlocked.Contains(r.GemTenderId))).ToList();
+        return Ok(masked);
     }
 
     /// <summary>Paged tender list from BiddingBuddyServices (MongoDB). Forwards pagination metadata to the client.</summary>
@@ -32,9 +36,35 @@ public class TendersController(
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ListPaged([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
     {
-        var result = await servicesClient.SearchTendersPagedAsync(query, ct);
-        return Ok(result);
+        var result   = await servicesClient.SearchTendersPagedAsync(query, ct);
+        var unlocked = await enrichmentService.GetUnlockedSetAsync(
+            CurrentOrgId, result.Items.Select(r => r.GemTenderId).ToList(), ct);
+        var maskedItems = result.Items.Select(r => MaskListItem(r, unlocked.Contains(r.GemTenderId))).ToList();
+        return Ok(result with { Items = maskedItems });
     }
+
+    // ── AI fields are masked unless the current org has unlocked the tender (per-org
+    //    pay-gate). Masking covers BOTH the list and detail paths — masking only one would
+    //    let a non-entitled org read AI via the other. ──
+    private static TenderListItemDto MaskListItem(TenderListItemDto i, bool unlocked) =>
+        unlocked
+            ? i with { AiUnlocked = true }
+            : i with { AiUnlocked = false, AiScore = null, WinProbability = null };
+
+    private static TenderDetailDto MaskDetail(TenderDetailDto d, bool unlocked) =>
+        unlocked
+            ? d with { AiUnlocked = true }
+            : d with
+            {
+                AiUnlocked       = false,
+                AiScore          = null,
+                EligibilityScore = null,
+                WinProbability   = null,
+                RiskScore        = null,
+                AiSummary        = null,
+                AiTags           = null,
+                AiAnalysis       = null,
+            };
 
     /// <summary>
     /// Distinct filter option values (categories, states) present in the tender data.
@@ -75,8 +105,34 @@ public class TendersController(
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
-        var tender = await servicesClient.GetTenderAsync(id.ToString(), ct);
-        return Ok(tender);
+        var tender   = await servicesClient.GetTenderAsync(id.ToString(), ct);
+        var unlocked = await enrichmentService.IsUnlockedAsync(CurrentOrgId, tender.GemTenderId, ct);
+        return Ok(MaskDetail(tender, unlocked));
+    }
+
+    /// <summary>
+    /// Request AI enrichment for a tender (pay-gated, on-demand). Idempotently unlocks the
+    /// tender for the current org and, if it isn't already enriched, enqueues a single AI
+    /// run. Returns the resolved per-org status (locked/queued/processing/enriched/failed).
+    /// </summary>
+    [HttpPost("{id:guid}/enrich")]
+    [ProducesResponseType(typeof(EnrichmentStatusDto), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Enrich(Guid id, CancellationToken ct)
+    {
+        var status = await enrichmentService.RequestEnrichmentAsync(CurrentOrgId, CurrentUserId, id, ct);
+        return Accepted(status);
+    }
+
+    /// <summary>Current per-org AI-enrichment status for a tender (drives the UI badge / paywall).</summary>
+    [HttpGet("{id:guid}/enrichment-status")]
+    [ProducesResponseType(typeof(EnrichmentStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> EnrichmentStatus(Guid id, CancellationToken ct)
+    {
+        var status = await enrichmentService.GetStatusAsync(CurrentOrgId, id, ct);
+        return Ok(status);
     }
 
     /// <summary>

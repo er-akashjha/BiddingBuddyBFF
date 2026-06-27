@@ -34,6 +34,14 @@ public class Tender
     // interest rules. NULL = not yet evaluated (the scan's work-list).
     public DateTime? AlertsScannedAt { get; set; }
 
+    // Global AI-enrichment lifecycle (mirrored from the pipeline):
+    //   none | extracted | queued | processing | enriched | failed
+    public string EnrichmentStatus { get; set; } = "none";
+
+    // Set once the "AI analysis ready" notification has been sent for this tender,
+    // so a re-enrich / repeated mirror doesn't re-email.
+    public DateTime? EnrichmentNotifiedAt { get; set; }
+
     public ICollection<TenderDocument> Documents { get; set; } = [];
     public ICollection<OrgTenderSettings> OrgSettings { get; set; } = [];
     public AiAnalysisResult? AiAnalysis { get; set; }

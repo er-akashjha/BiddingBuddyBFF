@@ -38,8 +38,11 @@ public class TenderConfiguration : IEntityTypeConfiguration<Tender>
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.AlertsScannedAt).HasColumnName("alerts_scanned_at");
+        b.Property(x => x.EnrichmentStatus).HasColumnName("enrichment_status").HasDefaultValue("none");
+        b.Property(x => x.EnrichmentNotifiedAt).HasColumnName("enrichment_notified_at");
 
         b.HasIndex(x => x.GemTenderId).IsUnique();
+        b.HasIndex(x => x.EnrichmentStatus);
         b.HasIndex(x => x.ClosingDate);
         b.HasIndex(x => x.Status);
         b.HasIndex(x => x.AiScore);

@@ -15,7 +15,12 @@ public record TenderListItemDto(
     int? AiScore,
     decimal? WinProbability,
     bool IsTracked,
-    bool IsSaved
+    bool IsSaved,
+    // Global enrichment lifecycle (none|extracted|queued|processing|enriched|failed)
+    // and whether the current org has unlocked the AI for this tender. When false,
+    // AI fields are masked (null) and the UI shows an "Unlock AI" CTA.
+    string? EnrichmentStatus = null,
+    bool AiUnlocked = false
 );
 
 public record TenderDetailDto(
@@ -62,7 +67,14 @@ public record TenderDetailDto(
     // ── Scraped source documents (the actual GeM PDFs in S3) ──
     IReadOnlyList<TenderSourceDocumentDto> SourceDocuments,
     // ── Full timeline (publishedAt / bidStartAt / bidEndAt / bidOpeningAt / validityDays / contractDuration) ──
-    TenderTimelineDto? Timeline
+    TenderTimelineDto? Timeline,
+    // ── Pay-gated AI enrichment ──
+    // Global enrichment lifecycle (none|extracted|queued|processing|enriched|failed)
+    // and whether the current org has unlocked the AI. When AiUnlocked is false the AI
+    // fields above (AiScore/EligibilityScore/WinProbability/RiskScore/AiSummary/AiTags/
+    // AiAnalysis) are masked to null and the UI shows an "Unlock AI" CTA.
+    string? EnrichmentStatus = null,
+    bool AiUnlocked = false
 );
 
 /// <summary>
