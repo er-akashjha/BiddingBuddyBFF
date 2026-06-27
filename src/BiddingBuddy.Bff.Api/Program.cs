@@ -124,6 +124,7 @@ builder.Services.AddCors(opt =>
     }));
 
 // ── Controllers + Swagger ─────────────────────────────────────────────────────
+builder.Services.AddMemoryCache();   // backs the dynamic sitemap cache
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
