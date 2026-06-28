@@ -194,16 +194,21 @@ public class BidService(
         if (!BidStages.IsValid(dto.Stage))
             throw new ArgumentException($"Invalid stage '{dto.Stage}'. Allowed: {string.Join(", ", BidStages.All)}.", nameof(dto));
 
+        // The local tender row may already exist under a different primary key than the
+        // id the UI sent (the pipeline mirrors tenders with a Postgres-generated id, while
+        // the UI sends the Mongo _id). EnsureLocalTenderAsync resolves/creates the row and
+        // returns the id the bid's FK must actually point at.
+        Guid? localTenderId = dto.TenderId;
         if (dto.TenderId.HasValue)
         {
-            await EnsureLocalTenderAsync(dto.TenderId.Value, ct);
+            localTenderId = await EnsureLocalTenderAsync(dto.TenderId.Value, ct);
         }
 
         var bid = new Bid
         {
             Id            = Guid.NewGuid(),
             OrgId         = orgId,
-            TenderId      = dto.TenderId,
+            TenderId      = localTenderId,
             Title         = dto.Title,
             Description   = dto.Description,
             Stage         = dto.Stage,
@@ -583,14 +588,23 @@ public class BidService(
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Ensures a row exists in the local PostgreSQL <c>tenders</c> table for the given id.
-    /// The canonical tender lives in MongoDB via BiddingBuddyServices; we mirror a minimal
-    /// stub here so that the <c>bids.tender_id</c> foreign key resolves.
+    /// Ensures a row exists in the local PostgreSQL <c>tenders</c> table for the given id and
+    /// returns the id the <c>bids.tender_id</c> foreign key must point at. The canonical tender
+    /// lives in MongoDB via BiddingBuddyServices; we mirror a minimal stub here so the FK resolves.
     /// </summary>
-    private async Task EnsureLocalTenderAsync(Guid tenderId, CancellationToken ct)
+    /// <remarks>
+    /// The id the UI sends (the Mongo <c>_id</c>) is a different id-space than the Postgres
+    /// primary key the pipeline assigns when it mirrors a tender (<see cref="InternalPipelineService"/>
+    /// inserts with <c>gen_random_uuid()</c>). So a row for this tender may already exist under a
+    /// <em>different</em> PK but the same <c>gem_tender_id</c>/<c>mongo_tender_id</c>. Inserting a
+    /// second stub in that case violates the <c>tenders_gem_tender_id_key</c> unique constraint, so
+    /// we resolve the existing row by its natural keys and reuse its id instead of duplicating it.
+    /// </remarks>
+    private async Task<Guid> EnsureLocalTenderAsync(Guid tenderId, CancellationToken ct)
     {
-        var exists = await db.Tenders.AnyAsync(t => t.Id == tenderId, ct);
-        if (exists) return;
+        // Already mirrored under this exact id — the FK resolves as-is.
+        if (await db.Tenders.AnyAsync(t => t.Id == tenderId, ct))
+            return tenderId;
 
         TenderDetailDto remote;
         try
@@ -603,11 +617,23 @@ public class BidService(
                 $"Tender {tenderId} not found in BiddingBuddyServices: {ex.Message}", ex);
         }
 
+        var mongoId = tenderId.ToString();
+        var gemId   = string.IsNullOrWhiteSpace(remote.GemTenderId) ? mongoId : remote.GemTenderId;
+
+        // The pipeline may already have mirrored this tender under a Postgres-generated id but
+        // the same gem_tender_id / mongo_tender_id. Reuse that row rather than insert a duplicate
+        // (which would violate tenders_gem_tender_id_key — the bug this guards against).
+        var existing = await db.Tenders
+            .FirstOrDefaultAsync(t => t.GemTenderId == gemId || t.MongoTenderId == mongoId, ct);
+        if (existing is not null)
+            return existing.Id;
+
         var now = DateTime.UtcNow;
         var stub = new Tender
         {
             Id               = tenderId,
-            GemTenderId      = string.IsNullOrWhiteSpace(remote.GemTenderId) ? tenderId.ToString() : remote.GemTenderId,
+            GemTenderId      = gemId,
+            MongoTenderId    = mongoId,
             Title            = string.IsNullOrWhiteSpace(remote.Title) ? "(untitled)" : remote.Title,
             Description      = remote.Description,
             BuyerOrgName     = remote.BuyerOrgName,
@@ -644,7 +670,23 @@ public class BidService(
 
         // Commit the tender stub immediately so the bid insert in the caller's
         // SaveChangesAsync sees it for the FK check.
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost a race with the pipeline upsert (it inserted the same gem_tender_id
+            // between our existence check and this save). Drop our stub and reuse the row
+            // that won the race so the bid still gets a valid FK.
+            entry.State = EntityState.Detached;
+            var raced = await db.Tenders
+                .FirstOrDefaultAsync(t => t.GemTenderId == gemId || t.MongoTenderId == mongoId, ct);
+            if (raced is null) throw;
+            return raced.Id;
+        }
+
+        return tenderId;
     }
 
     /// <summary>
