@@ -23,4 +23,3 @@ ALTER TABLE bids ADD COLUMN IF NOT EXISTS status_category TEXT
 
 -- 3 ── index for the default open-bids list ---------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_bids_org_status_cat ON bids (org_id, status_category);
-</content>

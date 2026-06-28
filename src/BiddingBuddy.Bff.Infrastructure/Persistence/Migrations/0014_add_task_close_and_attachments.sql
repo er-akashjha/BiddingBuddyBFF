@@ -61,4 +61,3 @@ VALUES
    'Text',
    '{"actionUrl":"{{ActionUrl}}"}'::jsonb)
 ON CONFLICT ON CONSTRAINT uq_template_code_channel DO NOTHING;
-</content>
