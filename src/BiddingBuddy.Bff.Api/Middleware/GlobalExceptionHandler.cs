@@ -12,6 +12,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         {
             KeyNotFoundException        => (StatusCodes.Status404NotFound,    "Not Found"),
             UnauthorizedAccessException => (StatusCodes.Status403Forbidden,   "Forbidden"),
+            ArgumentException           => (StatusCodes.Status400BadRequest,  "Bad Request"),
             InvalidOperationException   => (StatusCodes.Status400BadRequest,  "Bad Request"),
             _                          => (StatusCodes.Status500InternalServerError, "Internal Server Error"),
         };

@@ -2,6 +2,7 @@ namespace BiddingBuddy.Bff.Core.DTOs.Internal;
 
 public record UpsertTenderDto(
     string GemTenderId,
+    string? MongoTenderId,
     string Title,
     string? Description,
     string? BuyerOrgName,

@@ -12,6 +12,7 @@ public class TenderConfiguration : IEntityTypeConfiguration<Tender>
         b.HasKey(x => x.Id);
         b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
         b.Property(x => x.GemTenderId).HasColumnName("gem_tender_id").IsRequired();
+        b.Property(x => x.MongoTenderId).HasColumnName("mongo_tender_id");
         b.Property(x => x.Title).HasColumnName("title").IsRequired();
         b.Property(x => x.Description).HasColumnName("description");
         b.Property(x => x.BuyerOrgName).HasColumnName("buyer_org_name");
@@ -40,6 +41,7 @@ public class TenderConfiguration : IEntityTypeConfiguration<Tender>
         b.Property(x => x.AlertsScannedAt).HasColumnName("alerts_scanned_at");
 
         b.HasIndex(x => x.GemTenderId).IsUnique();
+        b.HasIndex(x => x.MongoTenderId).IsUnique().HasFilter("mongo_tender_id IS NOT NULL");
         b.HasIndex(x => x.ClosingDate);
         b.HasIndex(x => x.Status);
         b.HasIndex(x => x.AiScore);

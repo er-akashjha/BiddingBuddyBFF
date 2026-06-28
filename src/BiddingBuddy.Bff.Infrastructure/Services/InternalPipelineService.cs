@@ -21,6 +21,7 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
             var tender = new Tender
             {
                 GemTenderId      = dto.GemTenderId,
+                MongoTenderId    = dto.MongoTenderId,
                 Title            = dto.Title,
                 Description      = dto.Description,
                 BuyerOrgName     = dto.BuyerOrgName,
@@ -50,6 +51,9 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
         }
 
         existing.Title            = dto.Title;
+        // Set once and keep — the Mongo _id is stable for a tender; never clobber a
+        // populated value with a (possibly stale/absent) one from a later upsert.
+        existing.MongoTenderId    ??= dto.MongoTenderId;
         existing.Description      = dto.Description ?? existing.Description;
         existing.BuyerOrgName     = dto.BuyerOrgName ?? existing.BuyerOrgName;
         existing.BuyerOrgIdGem    = dto.BuyerOrgIdGem ?? existing.BuyerOrgIdGem;

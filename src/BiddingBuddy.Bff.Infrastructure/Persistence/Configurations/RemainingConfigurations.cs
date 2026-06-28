@@ -145,11 +145,37 @@ public class BidCommentConfiguration : IEntityTypeConfiguration<BidComment>
         b.Property(x => x.BidId).HasColumnName("bid_id");
         b.Property(x => x.AuthorId).HasColumnName("author_id");
         b.Property(x => x.Body).HasColumnName("body").IsRequired();
+        b.Property(x => x.ChecklistItemId).HasColumnName("checklist_item_id");
+        b.Property(x => x.Kind).HasColumnName("kind").HasDefaultValue("comment");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => x.BidId);
         b.HasOne(x => x.Bid).WithMany(x => x.Comments).HasForeignKey(x => x.BidId);
         b.HasOne(x => x.Author).WithMany().HasForeignKey(x => x.AuthorId);
+    }
+}
+
+public class BidAttachmentConfiguration : IEntityTypeConfiguration<BidAttachment>
+{
+    public void Configure(EntityTypeBuilder<BidAttachment> b)
+    {
+        b.ToTable("bid_attachments");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.OrgId).HasColumnName("org_id");
+        b.Property(x => x.BidId).HasColumnName("bid_id");
+        b.Property(x => x.ChecklistItemId).HasColumnName("checklist_item_id");
+        b.Property(x => x.CommentId).HasColumnName("comment_id");
+        b.Property(x => x.FileName).HasColumnName("file_name").IsRequired();
+        b.Property(x => x.ContentType).HasColumnName("content_type").IsRequired();
+        b.Property(x => x.SizeBytes).HasColumnName("size_bytes");
+        b.Property(x => x.StorageKey).HasColumnName("storage_key").IsRequired();
+        b.Property(x => x.UploadedBy).HasColumnName("uploaded_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasIndex(x => x.BidId);
+        b.HasIndex(x => x.CommentId);
+        b.HasOne(x => x.Bid).WithMany().HasForeignKey(x => x.BidId);
+        b.HasOne(x => x.Uploader).WithMany().HasForeignKey(x => x.UploadedBy);
     }
 }
 
