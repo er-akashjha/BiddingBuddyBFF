@@ -29,6 +29,20 @@ public record UpsertTenderDto(
 
 public record UpsertTenderResponseDto(Guid TenderId, bool Created);
 
+/// <summary>
+/// Outcome of one backfill batch (<c>POST /internal/tenders/backfill-mongo-id</c>).
+/// <para><c>Scanned</c> = rows examined this batch · <c>Updated</c> = mongo_tender_id filled ·
+/// <c>NotFound</c> = no matching Mongo tender for the gem id · <c>Failed</c> = lookup/persist error ·
+/// <c>Remaining</c> = rows still NULL after this batch (call again until 0).</para>
+/// </summary>
+public record BackfillTenderMongoIdResultDto(
+    int Scanned,
+    int Updated,
+    int NotFound,
+    int Failed,
+    int Remaining
+);
+
 public record UpsertDocumentContentDto(
     string FileName,
     string S3Key,

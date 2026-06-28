@@ -737,7 +737,7 @@ public class BidService(
 
         return new BidDetailDto(
             bid.Id, bid.OrgId, bid.TenderId,
-            bid.Tender?.GemTenderId, bid.Title, bid.Description,
+            bid.Tender?.GemTenderId, bid.Tender?.MongoTenderId, bid.Title, bid.Description,
             bid.Stage, bid.StatusCategory, bid.Priority,
             bid.AssignedTo, bid.AssignedUser?.Name,
             bid.DueDate, bid.TenderValue, bid.OurBidValue,

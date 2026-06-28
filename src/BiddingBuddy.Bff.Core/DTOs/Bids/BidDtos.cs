@@ -47,6 +47,11 @@ public record BidDetailDto(
     Guid OrgId,
     Guid? TenderId,
     string? GemTenderId,
+    // The linked tender's MongoDB _id (the system of record for full tender content).
+    // The UI re-fetches rich tender context by this id — TenderId is the local Postgres
+    // PK, a different id-space the tender-detail endpoint can't resolve. NULL until the
+    // pipeline backfills mongo_tender_id (migration 0010).
+    string? MongoTenderId,
     string Title,
     string? Description,
     string Stage,

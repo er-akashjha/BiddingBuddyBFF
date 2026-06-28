@@ -1,15 +1,20 @@
 using BiddingBuddy.Bff.Core.DTOs.Internal;
+using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
 // Interest matching is no longer triggered inline here — the scheduled
 // TenderMatchScanWorker (IMatchingService.ScanNewTendersAsync) picks up newly-added
 // tenders via the alerts_scanned_at flag and emails one digest per matched org.
-public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
+public class InternalPipelineService(
+    BffDbContext db,
+    IBiddingBuddyServicesClient servicesClient,
+    ILogger<InternalPipelineService> logger) : IInternalPipelineService
 {
     public async Task<UpsertTenderResponseDto> UpsertTenderAsync(UpsertTenderDto dto, CancellationToken ct = default)
     {
@@ -78,6 +83,74 @@ public class InternalPipelineService(BffDbContext db) : IInternalPipelineService
 
         await db.SaveChangesAsync(ct);
         return new UpsertTenderResponseDto(existing.Id, false);
+    }
+
+    public async Task<BackfillTenderMongoIdResultDto> BackfillTenderMongoIdsAsync(
+        int batchSize, CancellationToken ct = default)
+    {
+        var size = Math.Clamp(batchSize, 1, 1000);
+
+        // Oldest first — these are the rows that predate migration 0010 and are least
+        // likely to be re-touched by the pipeline soon, so they benefit most from the push.
+        var pending = await db.Tenders
+            .Where(t => t.MongoTenderId == null)
+            .OrderBy(t => t.CreatedAt)
+            .Take(size)
+            .ToListAsync(ct);
+
+        int updated = 0, notFound = 0, failed = 0;
+
+        foreach (var tender in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                // No direct by-gem-id lookup exists; the free-text search (NameContains)
+                // matches the gem reference against name/tag/sourceTenderId on the Services
+                // side. Confirm with an EXACT gem-id match so a fuzzy hit can't write the
+                // wrong Mongo id onto this row.
+                var matches = await servicesClient.SearchTendersAsync(
+                    new TenderSearchQueryDto { NameContains = tender.GemTenderId, PageSize = 20 }, ct);
+
+                var match = matches.FirstOrDefault(m =>
+                    string.Equals(m.GemTenderId, tender.GemTenderId, StringComparison.OrdinalIgnoreCase));
+
+                if (match is null)
+                {
+                    notFound++;
+                    logger.LogWarning("[Backfill] No Mongo tender matched gem id {GemId}", tender.GemTenderId);
+                    continue;
+                }
+
+                tender.MongoTenderId = match.Id.ToString();
+
+                // Persist per row so one bad row (e.g. a partial-unique-index collision when
+                // two stub rows share a gem id) can't abort the whole batch.
+                try
+                {
+                    await db.SaveChangesAsync(ct);
+                    updated++;
+                }
+                catch (DbUpdateException ex)
+                {
+                    failed++;
+                    db.Entry(tender).State = EntityState.Detached; // drop the rejected change
+                    logger.LogWarning(ex, "[Backfill] Could not persist mongo id for gem id {GemId}", tender.GemTenderId);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failed++;
+                logger.LogWarning(ex, "[Backfill] Lookup failed for gem id {GemId}", tender.GemTenderId);
+            }
+        }
+
+        var remaining = await db.Tenders.CountAsync(t => t.MongoTenderId == null, ct);
+        logger.LogInformation(
+            "[Backfill] mongo_tender_id batch: scanned {Scanned}, updated {Updated}, notFound {NotFound}, failed {Failed}, remaining {Remaining}",
+            pending.Count, updated, notFound, failed, remaining);
+
+        return new BackfillTenderMongoIdResultDto(pending.Count, updated, notFound, failed, remaining);
     }
 
     public async Task UpsertDocumentContentAsync(string gemTenderId, UpsertDocumentContentDto dto, CancellationToken ct = default)
