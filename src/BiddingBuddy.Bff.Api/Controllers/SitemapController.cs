@@ -1,4 +1,5 @@
 using System.Text;
+using BiddingBuddy.Bff.Api.Seo;
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -100,7 +101,7 @@ public class SitemapController(
         foreach (var t in items)
         {
             if (t.ClosingDate is { } closing && closing < today) continue;   // expired → omit
-            var slug = Slugify(t.Title);
+            var slug = SeoHelpers.Slugify(t.Title);
             var seg = slug.Length > 0 ? $"{slug}-{t.Id}" : t.Id.ToString();
             var lastmod = t.PublishedDate?.ToString("yyyy-MM-dd");
             AppendUrl(sb, $"{BaseUrl}/explore/{seg}", lastmod);
@@ -181,43 +182,14 @@ public class SitemapController(
 
     private static void AppendSitemapRef(StringBuilder sb, string loc)
     {
-        sb.Append("  <sitemap><loc>").Append(XmlEscape(loc)).AppendLine("</loc></sitemap>");
+        sb.Append("  <sitemap><loc>").Append(SeoHelpers.XmlEscape(loc)).AppendLine("</loc></sitemap>");
     }
 
     private static void AppendUrl(StringBuilder sb, string loc, string? lastmod)
     {
-        sb.Append("  <url><loc>").Append(XmlEscape(loc)).Append("</loc>");
+        sb.Append("  <url><loc>").Append(SeoHelpers.XmlEscape(loc)).Append("</loc>");
         if (!string.IsNullOrEmpty(lastmod))
             sb.Append("<lastmod>").Append(lastmod).Append("</lastmod>");
         sb.AppendLine("</url>");
-    }
-
-    private static string XmlEscape(string s) =>
-        s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;").Replace("'", "&apos;");
-
-    /// <summary>Mirror of the UI slugify(): lowercase, non-alphanumeric → single dash, trimmed, capped at 70.</summary>
-    private static string Slugify(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
-
-        var sb = new StringBuilder(text.Length);
-        var prevDash = false;
-        foreach (var ch in text.ToLowerInvariant())
-        {
-            if (ch is (>= 'a' and <= 'z') or (>= '0' and <= '9'))
-            {
-                sb.Append(ch);
-                prevDash = false;
-            }
-            else if (!prevDash && sb.Length > 0)
-            {
-                sb.Append('-');
-                prevDash = true;
-            }
-        }
-
-        var slug = sb.ToString().Trim('-');
-        if (slug.Length > 70) slug = slug[..70].Trim('-');
-        return slug;
     }
 }
