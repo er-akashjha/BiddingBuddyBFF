@@ -14,16 +14,15 @@ public class MatchingService(
     IConfiguration config,
     ILogger<MatchingService> log) : IMatchingService
 {
-    // Defaults applied when an org has no org_alert_settings row yet.
-    private static readonly string[] DefaultChannels = ["Email", "InApp"];
-    private static readonly string[] DefaultRoles = ["owner", "admin", "bid_manager"];
-    private const int DefaultDigestSize = 10;
+    // Cooldown default applied when an org has no org_alert_settings row yet.
+    private const int DefaultMinIntervalMinutes = 360;   // 6 h
 
     // Single-flight guard so the scheduled worker and a manual /internal/matching/scan
     // never run concurrently within this process (which would double-send digests).
     private static readonly SemaphoreSlim ScanGate = new(1, 1);
 
     private string FrontendBaseUrl => (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+    private string LogoUrl => $"{FrontendBaseUrl}/images/logo/mark-reverse.png";
 
     public async Task OnTenderUpsertedAsync(Guid tenderId, CancellationToken ct = default)
     {
@@ -157,40 +156,41 @@ public class MatchingService(
                         .Where(m => m.OrgId == orgId && ids.Contains(m.TenderId))
                         .Select(m => m.TenderId).ToListAsync(ct)).ToHashSet();
 
-                    var batchId = Guid.NewGuid();
                     foreach (var t in matched.Where(t => !existing.Contains(t.Id)))
                     {
+                        // Buffer as pending — the cooldown-gated flush below groups and
+                        // sends them, so we never fire one email per scan tick.
                         db.TenderMatches.Add(new TenderMatch
                         {
                             OrgId    = orgId,
                             TenderId = t.Id,
                             RuleId   = ruleFor[(orgId, t.Id)],
-                            Status   = "sent",
-                            BatchId  = batchId,
-                            SentAt   = DateTime.UtcNow,
+                            Status   = "pending",
                         });
                         matchesCreated++;
                     }
                 }
 
-                // Stamp the whole batch scanned (matched or not), then persist — must be
-                // saved before dispatch since the publisher shares this DbContext.
+                // Stamp the whole batch scanned (matched or not), then persist.
                 foreach (var t in batch) t.AlertsScannedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
                 scanned += batch.Count;
 
-                // One digest per matched org for this batch.
-                foreach (var (orgId, matched) in byOrg)
-                {
-                    var settings = await db.OrgAlertSettings.FirstOrDefaultAsync(s => s.OrgId == orgId, ct);
-                    var channels = settings?.NotifyChannels ?? DefaultChannels;
-                    var roles    = settings?.NotifyRoles ?? DefaultRoles;
-                    if (await DispatchDigestAsync(orgId, matched, channels, roles, ct))
-                        orgsNotified++;
-                }
-
                 if (batch.Count < batchSize) break;   // last (partial) page
             }
+
+            // Flush every org with a pending backlog whose cooldown has elapsed,
+            // grouping all its buffered matches into ONE digest. Runs every tick so a
+            // backlog buffered on an earlier tick still goes out once its cooldown
+            // passes — even on ticks that scanned no new tenders.
+            var pendingOrgs = await db.TenderMatches
+                .Where(m => m.Status == "pending")
+                .Select(m => m.OrgId)
+                .Distinct()
+                .ToListAsync(ct);
+            foreach (var orgId in pendingOrgs)
+                if (await FlushOrgAsync(orgId, force: false, ct))
+                    orgsNotified++;
 
             log.LogInformation("[Match] Scan complete — {Scanned} scanned, {Matches} new match(es), {Orgs} org-digest(s) sent.",
                 scanned, matchesCreated, orgsNotified);
@@ -209,19 +209,15 @@ public class MatchingService(
         var settings = await db.OrgAlertSettings.FirstOrDefaultAsync(s => s.OrgId == orgId, ct);
         if (settings is { IsEnabled: false }) return false;
 
-        var digestSize = settings?.DigestSize ?? DefaultDigestSize;
-        var channels   = settings?.NotifyChannels ?? DefaultChannels;
-        var roles      = settings?.NotifyRoles ?? DefaultRoles;
+        var interval = TimeSpan.FromMinutes(settings?.MinSendIntervalMinutes ?? DefaultMinIntervalMinutes);
 
-        // Pending matches joined to their tender, newest-matched irrelevant — we
-        // order for delivery by soonest deadline below.
+        // Pending matches joined to their tender — ordered for delivery by soonest
+        // deadline below.
         var pending = await db.TenderMatches
             .Where(m => m.OrgId == orgId && m.Status == "pending")
             .Join(db.Tenders, m => m.TenderId, t => t.Id, (m, t) => new { Match = m, Tender = t })
             .ToListAsync(ct);
         if (pending.Count == 0) return false;
-
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // Expire any whose tender deadline has passed / is no longer live.
         var expired = pending.Where(p => !IsLive(p.Tender.Status, p.Tender.ClosingDate)).ToList();
@@ -231,8 +227,10 @@ public class MatchingService(
             .OrderBy(p => p.Tender.ClosingDate ?? DateOnly.MaxValue)   // soonest-closing first
             .ToList();
 
-        // Count trigger: hold until the batch fills (unless this is the time-fallback).
-        if (!force && live.Count < digestSize)
+        // Cooldown gate: at most one digest per MinSendIntervalMinutes. The first-ever
+        // send (no LastDigestSentAt) goes immediately; force=true is the manual
+        // /internal/digests/flush drain which ignores the cooldown.
+        if (!force && settings?.LastDigestSentAt is { } last && DateTime.UtcNow - last < interval)
         {
             if (expired.Count > 0) await db.SaveChangesAsync(ct);
             return false;
@@ -243,15 +241,25 @@ public class MatchingService(
             return false;
         }
 
-        // Mark this batch sent BEFORE dispatching: the publisher shares our DbContext
-        // and commits its own transaction, so our change-tracker must be clean first.
+        // Ensure a settings row exists so the cooldown clock can be stamped (uses the
+        // entity's default channels/roles/interval for a brand-new org).
+        if (settings is null)
+        {
+            settings = new OrgAlertSettings { OrgId = orgId };
+            db.OrgAlertSettings.Add(settings);
+        }
+
+        // Mark this batch sent + stamp the cooldown clock BEFORE dispatching: the
+        // publisher shares our DbContext and commits its own transaction, so our
+        // change-tracker must be clean first.
         var batchId = Guid.NewGuid();
         foreach (var p in live) { p.Match.Status = "sent"; p.Match.BatchId = batchId; p.Match.SentAt = DateTime.UtcNow; }
+        settings.LastDigestSentAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        await DispatchDigestAsync(orgId, live.Select(p => p.Tender).ToList(), channels, roles, ct);
+        await DispatchDigestAsync(orgId, live.Select(p => p.Tender).ToList(), settings.NotifyChannels, settings.NotifyRoles, ct);
 
-        log.LogInformation("[Match] Flushed digest for org {OrgId}: {Count} tenders", orgId, live.Count);
+        log.LogInformation("[Match] Flushed digest for org {OrgId}: {Count} tender(s)", orgId, live.Count);
         return true;
     }
 
@@ -271,18 +279,36 @@ public class MatchingService(
             .ToListAsync(ct);
 
         var ordered = tenders.OrderBy(t => t.ClosingDate ?? DateOnly.MaxValue).ToList();
-        var tenderPayload = ordered.Select(t => (object)new Dictionary<string, object?>
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var allUrl = $"{FrontendBaseUrl}/tenders?matched=1";
+
+        var tenderPayload = ordered.Select((t, i) =>
         {
-            ["Title"]       = t.Title,
-            ["Category"]    = t.Category ?? "",
-            ["State"]       = t.State ?? "",
-            ["Value"]       = t.TenderValue?.ToString("N0"),
-            ["ClosingDate"] = t.ClosingDate?.ToString("dd MMM yyyy") ?? "—",
-            ["Url"]         = $"{FrontendBaseUrl}/tenders/{t.Id}",
+            var daysLeft = t.ClosingDate.HasValue ? t.ClosingDate.Value.DayNumber - today.DayNumber : (int?)null;
+            return (object)new Dictionary<string, object?>
+            {
+                ["Rank"]          = i + 1,
+                ["Title"]         = t.Title,
+                ["Category"]      = t.Category ?? "",
+                ["State"]         = t.State ?? "",
+                ["Value"]         = t.TenderValue?.ToString("N0"),
+                ["ClosingDate"]   = t.ClosingDate?.ToString("dd MMM yyyy") ?? "—",
+                ["DaysLeftLabel"] = DaysLeftLabel(daysLeft),
+                ["IsUrgent"]      = daysLeft is >= 0 and <= 7,
+                // Link by the Mongo _id (what the SPA /tenders/:id route resolves by),
+                // so the link works for tenders from ANY source portal. Fall back to the
+                // matched-list page if not yet backfilled — never the wrong tender.
+                ["Url"]           = t.MongoTenderId is { Length: > 0 } mid
+                                        ? $"{FrontendBaseUrl}/tenders/{mid}"
+                                        : allUrl,
+            };
         }).ToList();
 
         var firstTitle = ordered[0].Title;
-        var allUrl = $"{FrontendBaseUrl}/tenders?matched=1";
+        var soonestDays = ordered[0].ClosingDate.HasValue
+            ? ordered[0].ClosingDate!.Value.DayNumber - today.DayNumber : (int?)null;
+        var totalValue = ordered.Sum(t => t.TenderValue ?? 0m);
+        var showTotal = ordered.Count > 1 && totalValue > 0;
 
         foreach (var r in recipients)
         {
@@ -295,12 +321,16 @@ public class MatchingService(
 
             var payload = new Dictionary<string, object>
             {
-                ["FirstName"]  = FirstNameOf(r.Name),
-                ["Count"]      = ordered.Count,
-                ["One"]        = ordered.Count == 1,
-                ["FirstTitle"] = firstTitle,
-                ["Tenders"]    = tenderPayload,
-                ["AllUrl"]     = allUrl,
+                ["FirstName"]   = FirstNameOf(r.Name),
+                ["Count"]       = ordered.Count,
+                ["One"]         = ordered.Count == 1,
+                ["FirstTitle"]  = firstTitle,
+                ["Tenders"]     = tenderPayload,
+                ["AllUrl"]      = allUrl,
+                ["LogoUrl"]     = LogoUrl,
+                ["SummaryLine"] = SummaryLine(soonestDays),
+                ["ShowTotal"]   = showTotal,
+                ["TotalValue"]  = totalValue.ToString("N0"),
             };
 
             try
@@ -369,4 +399,24 @@ public class MatchingService(
 
     private static string FirstNameOf(string? fullName)
         => string.IsNullOrWhiteSpace(fullName) ? "there" : fullName.Trim().Split(' ')[0];
+
+    // Summary-strip line driven by the soonest-closing tender in the digest.
+    private static string SummaryLine(int? days) => days switch
+    {
+        null    => "Newly matched to your interests",
+        < 0     => "Some have closed — act now",
+        0       => "Soonest closes today",
+        1       => "Soonest closes in 1 day",
+        _       => $"Soonest closes in {days} days",
+    };
+
+    // Per-tender deadline badge label.
+    private static string DaysLeftLabel(int? days) => days switch
+    {
+        null    => "No deadline",
+        < 0     => "Closed",
+        0       => "Closes today",
+        1       => "1 day left",
+        _       => $"{days} days left",
+    };
 }

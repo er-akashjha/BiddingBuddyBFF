@@ -1,0 +1,661 @@
+[2026-06-28 08:14:18.640] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] Scheduled tender-match scan started — every "00:15:00".
+[2026-06-28 08:14:27.064] [INF] [BiddingBuddyBFF] [cid:a48c872b-7b3a-4aa5-82a6-901ed0eeaa98] HTTP GET /swagger/index.html responded 200 in 114.7621 ms
+[2026-06-28 08:14:27.988] [INF] [BiddingBuddyBFF] [cid:ef82490c-5932-4e1c-9d89-e6bf4b1468ad] HTTP GET /swagger/v1/swagger.json responded 200 in 545.1490 ms
+[2026-06-28 08:14:36.894] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 89 scanned, 0 new match(es), 0 org-digest(s) sent.
+[2026-06-28 08:14:36.898] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 89 scanned, 0 matched, 0 org-digests sent.
+[2026-06-28 08:17:09.884] [WRN] [BiddingBuddyBFF] [cid:d331dd8a-89d1-4582-94fc-ea661a65594d] Failed to determine the https port for redirect.
+[2026-06-28 08:17:11.433] [INF] [BiddingBuddyBFF] [cid:d331dd8a-89d1-4582-94fc-ea661a65594d] HTTP POST /api/auth/login responded 401 in 1593.8905 ms
+[2026-06-28 08:17:45.763] [INF] [BiddingBuddyBFF] [cid:34baa078-b1c6-46d2-a3c2-e92aae0942cc] HTTP POST /api/auth/login responded 200 in 784.3899 ms
+[2026-06-28 08:18:44.787] [INF] [BiddingBuddyBFF] [cid:609da419-809f-42df-be29-be95303adf48] HTTP GET /api/auth/me responded 200 in 647.3198 ms
+[2026-06-28 08:19:25.319] [INF] [BiddingBuddyBFF] [cid:82dbcd08-87ec-40c0-8206-a9f950a3e4af] HTTP GET /api/documents/95266fda-fae3-45f0-9105-e1f6a79cc20f/view-url responded 200 in 1548.5174 ms
+[2026-06-28 08:29:35.130] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 98 scanned, 0 new match(es), 0 org-digest(s) sent.
+[2026-06-28 08:29:35.151] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 98 scanned, 0 matched, 0 org-digests sent.
+[2026-06-28 08:44:40.462] [INF] [BiddingBuddyBFF] [cid:e331acfa-5558-45e1-af3b-33d1560585c5] Notification "14184370-33fd-456e-b2ab-1afc2864c749" (Information/TENDER_MATCH) created with 2 deliveries; correlationId="e331acfa-5558-45e1-af3b-33d1560585c5"
+[2026-06-28 08:44:40.594] [INF] [BiddingBuddyBFF] [cid:] Opening RabbitMQ connection to 13.233.138.227:5672 vhost=/
+[2026-06-28 08:45:02.046] [ERR] [BiddingBuddyBFF] [cid:] RabbitMQ broker unreachable; could not publish to notification.email
+RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable
+ ---> System.AggregateException: One or more errors occurred. (Connection failed)
+ ---> RabbitMQ.Client.Exceptions.ConnectFailureException: Connection failed
+ ---> System.Net.Sockets.SocketException (10060): A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Threading.Tasks.ValueTask.ValueTaskSourceAsTask.<>c.<.cctor>b__4_0(Object state)
+--- End of stack trace from previous location ---
+   at RabbitMQ.Client.TcpClientAdapter.ConnectAsync(String host, Int32 port)
+   at RabbitMQ.Client.Impl.TaskExtensions.TimeoutAfter(Task task, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingAddressFamily(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout, AddressFamily family)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingIPv4(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler..ctor(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.Framing.Impl.IProtocolExtensions.CreateFrameHandler(IProtocol protocol, AmqpTcpEndpoint endpoint, ArrayPool`1 pool, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.ConnectionFactory.CreateFrameHandler(AmqpTcpEndpoint endpoint)
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   at RabbitMQ.Client.Framing.Impl.AutorecoveringConnection.Init(IEndpointResolver endpoints)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.CreateConnection() in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 55
+   at System.Lazy`1.ViaFactory(LazyThreadSafetyMode mode)
+   at System.Lazy`1.ExecutionAndPublication(LazyHelper executionAndPublication, Boolean useDefaultConstructor)
+   at System.Lazy`1.CreateValue()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.PublishAsync[T](String queueName, T message, Nullable`1 correlationId, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 65
+[2026-06-28 08:45:02.248] [WRN] [BiddingBuddyBFF] [cid:] RabbitMQ publish failed for delivery "ff8852fd-cd39-4183-8205-fc0ae500606e" (queue notification.email); the processor's poller will pick it up after PendingGraceSeconds.
+[2026-06-28 08:45:02.274] [ERR] [BiddingBuddyBFF] [cid:] RabbitMQ broker unreachable; could not publish to notification.inapp
+RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable
+ ---> System.AggregateException: One or more errors occurred. (Connection failed)
+ ---> RabbitMQ.Client.Exceptions.ConnectFailureException: Connection failed
+ ---> System.Net.Sockets.SocketException (10060): A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Threading.Tasks.ValueTask.ValueTaskSourceAsTask.<>c.<.cctor>b__4_0(Object state)
+--- End of stack trace from previous location ---
+   at RabbitMQ.Client.TcpClientAdapter.ConnectAsync(String host, Int32 port)
+   at RabbitMQ.Client.Impl.TaskExtensions.TimeoutAfter(Task task, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingAddressFamily(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout, AddressFamily family)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingIPv4(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler..ctor(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.Framing.Impl.IProtocolExtensions.CreateFrameHandler(IProtocol protocol, AmqpTcpEndpoint endpoint, ArrayPool`1 pool, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.ConnectionFactory.CreateFrameHandler(AmqpTcpEndpoint endpoint)
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   at RabbitMQ.Client.Framing.Impl.AutorecoveringConnection.Init(IEndpointResolver endpoints)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.CreateConnection() in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 55
+   at System.Lazy`1.ViaFactory(LazyThreadSafetyMode mode)
+--- End of stack trace from previous location ---
+   at System.Lazy`1.CreateValue()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.PublishAsync[T](String queueName, T message, Nullable`1 correlationId, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 65
+[2026-06-28 08:45:02.283] [WRN] [BiddingBuddyBFF] [cid:] RabbitMQ publish failed for delivery "8f655483-ad65-434d-9d60-e73cf226dd12" (queue notification.inapp); the processor's poller will pick it up after PendingGraceSeconds.
+[2026-06-28 08:45:02.501] [INF] [BiddingBuddyBFF] [cid:ca61de92-da76-482f-9ad0-2ac0188aa85d] Notification "168b02e3-2c84-4c99-9645-b0067391ed2b" (Information/TENDER_MATCH) created with 2 deliveries; correlationId="ca61de92-da76-482f-9ad0-2ac0188aa85d"
+[2026-06-28 08:45:02.535] [ERR] [BiddingBuddyBFF] [cid:] RabbitMQ broker unreachable; could not publish to notification.email
+RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable
+ ---> System.AggregateException: One or more errors occurred. (Connection failed)
+ ---> RabbitMQ.Client.Exceptions.ConnectFailureException: Connection failed
+ ---> System.Net.Sockets.SocketException (10060): A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Threading.Tasks.ValueTask.ValueTaskSourceAsTask.<>c.<.cctor>b__4_0(Object state)
+--- End of stack trace from previous location ---
+   at RabbitMQ.Client.TcpClientAdapter.ConnectAsync(String host, Int32 port)
+   at RabbitMQ.Client.Impl.TaskExtensions.TimeoutAfter(Task task, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingAddressFamily(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout, AddressFamily family)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingIPv4(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler..ctor(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.Framing.Impl.IProtocolExtensions.CreateFrameHandler(IProtocol protocol, AmqpTcpEndpoint endpoint, ArrayPool`1 pool, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.ConnectionFactory.CreateFrameHandler(AmqpTcpEndpoint endpoint)
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   at RabbitMQ.Client.Framing.Impl.AutorecoveringConnection.Init(IEndpointResolver endpoints)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.CreateConnection() in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 55
+   at System.Lazy`1.ViaFactory(LazyThreadSafetyMode mode)
+--- End of stack trace from previous location ---
+   at System.Lazy`1.CreateValue()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.PublishAsync[T](String queueName, T message, Nullable`1 correlationId, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 65
+[2026-06-28 08:45:02.542] [WRN] [BiddingBuddyBFF] [cid:] RabbitMQ publish failed for delivery "1106e03e-17da-4704-9e71-3db0d65623a1" (queue notification.email); the processor's poller will pick it up after PendingGraceSeconds.
+[2026-06-28 08:45:02.565] [ERR] [BiddingBuddyBFF] [cid:] RabbitMQ broker unreachable; could not publish to notification.inapp
+RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable
+ ---> System.AggregateException: One or more errors occurred. (Connection failed)
+ ---> RabbitMQ.Client.Exceptions.ConnectFailureException: Connection failed
+ ---> System.Net.Sockets.SocketException (10060): A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Threading.Tasks.ValueTask.ValueTaskSourceAsTask.<>c.<.cctor>b__4_0(Object state)
+--- End of stack trace from previous location ---
+   at RabbitMQ.Client.TcpClientAdapter.ConnectAsync(String host, Int32 port)
+   at RabbitMQ.Client.Impl.TaskExtensions.TimeoutAfter(Task task, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingAddressFamily(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout, AddressFamily family)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingIPv4(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler..ctor(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.Framing.Impl.IProtocolExtensions.CreateFrameHandler(IProtocol protocol, AmqpTcpEndpoint endpoint, ArrayPool`1 pool, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.ConnectionFactory.CreateFrameHandler(AmqpTcpEndpoint endpoint)
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   at RabbitMQ.Client.Framing.Impl.AutorecoveringConnection.Init(IEndpointResolver endpoints)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.CreateConnection() in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 55
+   at System.Lazy`1.ViaFactory(LazyThreadSafetyMode mode)
+--- End of stack trace from previous location ---
+   at System.Lazy`1.CreateValue()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.PublishAsync[T](String queueName, T message, Nullable`1 correlationId, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 65
+[2026-06-28 08:45:02.574] [WRN] [BiddingBuddyBFF] [cid:] RabbitMQ publish failed for delivery "192817a1-f77d-47a8-be91-665923ae0c65" (queue notification.inapp); the processor's poller will pick it up after PendingGraceSeconds.
+[2026-06-28 08:45:02.784] [INF] [BiddingBuddyBFF] [cid:de2317ba-88c0-4b2b-84ef-ad4ba556c1de] Notification "20522cf3-3d18-4bfc-9e07-539a826a8d09" (Information/TENDER_MATCH) created with 2 deliveries; correlationId="de2317ba-88c0-4b2b-84ef-ad4ba556c1de"
+[2026-06-28 08:45:02.816] [ERR] [BiddingBuddyBFF] [cid:] RabbitMQ broker unreachable; could not publish to notification.email
+RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable
+ ---> System.AggregateException: One or more errors occurred. (Connection failed)
+ ---> RabbitMQ.Client.Exceptions.ConnectFailureException: Connection failed
+ ---> System.Net.Sockets.SocketException (10060): A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Threading.Tasks.ValueTask.ValueTaskSourceAsTask.<>c.<.cctor>b__4_0(Object state)
+--- End of stack trace from previous location ---
+   at RabbitMQ.Client.TcpClientAdapter.ConnectAsync(String host, Int32 port)
+   at RabbitMQ.Client.Impl.TaskExtensions.TimeoutAfter(Task task, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingAddressFamily(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout, AddressFamily family)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingIPv4(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler..ctor(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.Framing.Impl.IProtocolExtensions.CreateFrameHandler(IProtocol protocol, AmqpTcpEndpoint endpoint, ArrayPool`1 pool, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.ConnectionFactory.CreateFrameHandler(AmqpTcpEndpoint endpoint)
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   at RabbitMQ.Client.Framing.Impl.AutorecoveringConnection.Init(IEndpointResolver endpoints)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.CreateConnection() in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 55
+   at System.Lazy`1.ViaFactory(LazyThreadSafetyMode mode)
+--- End of stack trace from previous location ---
+   at System.Lazy`1.CreateValue()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.PublishAsync[T](String queueName, T message, Nullable`1 correlationId, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 65
+[2026-06-28 08:45:02.824] [WRN] [BiddingBuddyBFF] [cid:] RabbitMQ publish failed for delivery "96a7c979-b635-411b-ada7-b9806adf2fec" (queue notification.email); the processor's poller will pick it up after PendingGraceSeconds.
+[2026-06-28 08:45:02.846] [ERR] [BiddingBuddyBFF] [cid:] RabbitMQ broker unreachable; could not publish to notification.inapp
+RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable
+ ---> System.AggregateException: One or more errors occurred. (Connection failed)
+ ---> RabbitMQ.Client.Exceptions.ConnectFailureException: Connection failed
+ ---> System.Net.Sockets.SocketException (10060): A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Threading.Tasks.ValueTask.ValueTaskSourceAsTask.<>c.<.cctor>b__4_0(Object state)
+--- End of stack trace from previous location ---
+   at RabbitMQ.Client.TcpClientAdapter.ConnectAsync(String host, Int32 port)
+   at RabbitMQ.Client.Impl.TaskExtensions.TimeoutAfter(Task task, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectOrFail(ITcpClient socket, AmqpTcpEndpoint endpoint, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingAddressFamily(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout, AddressFamily family)
+   at RabbitMQ.Client.Impl.SocketFrameHandler.ConnectUsingIPv4(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan timeout)
+   at RabbitMQ.Client.Impl.SocketFrameHandler..ctor(AmqpTcpEndpoint endpoint, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.Framing.Impl.IProtocolExtensions.CreateFrameHandler(IProtocol protocol, AmqpTcpEndpoint endpoint, ArrayPool`1 pool, Func`2 socketFactory, TimeSpan connectionTimeout, TimeSpan readTimeout, TimeSpan writeTimeout)
+   at RabbitMQ.Client.ConnectionFactory.CreateFrameHandler(AmqpTcpEndpoint endpoint)
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.EndpointResolverExtensions.SelectOne[T](IEndpointResolver resolver, Func`2 selector)
+   at RabbitMQ.Client.Framing.Impl.AutorecoveringConnection.Init(IEndpointResolver endpoints)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   --- End of inner exception stack trace ---
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(IEndpointResolver endpointResolver, String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection(String clientProvidedName)
+   at RabbitMQ.Client.ConnectionFactory.CreateConnection()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.CreateConnection() in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 55
+   at System.Lazy`1.ViaFactory(LazyThreadSafetyMode mode)
+--- End of stack trace from previous location ---
+   at System.Lazy`1.CreateValue()
+   at BiddingBuddy.Bff.Infrastructure.Services.RabbitMqPublisher.PublishAsync[T](String queueName, T message, Nullable`1 correlationId, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\RabbitMqPublisher.cs:line 65
+[2026-06-28 08:45:02.854] [WRN] [BiddingBuddyBFF] [cid:] RabbitMQ publish failed for delivery "fb87a483-57b2-43df-a219-5983107c7710" (queue notification.inapp); the processor's poller will pick it up after PendingGraceSeconds.
+[2026-06-28 08:45:02.856] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 29 scanned, 1 new match(es), 1 org-digest(s) sent.
+[2026-06-28 08:45:02.858] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 29 scanned, 1 matched, 1 org-digests sent.
+[2026-06-28 08:59:34.781] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 17 scanned, 0 new match(es), 0 org-digest(s) sent.
+[2026-06-28 08:59:34.799] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 17 scanned, 0 matched, 0 org-digests sent.
+[2026-06-28 09:14:35.125] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 32 scanned, 0 new match(es), 0 org-digest(s) sent.
+[2026-06-28 09:14:35.152] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 32 scanned, 0 matched, 0 org-digests sent.
+[2026-06-28 09:29:35.107] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 28 scanned, 0 new match(es), 0 org-digest(s) sent.
+[2026-06-28 09:29:35.126] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 28 scanned, 0 matched, 0 org-digests sent.
+[2026-06-28 09:44:34.879] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 13 scanned, 0 new match(es), 0 org-digest(s) sent.
+[2026-06-28 09:44:34.901] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] 13 scanned, 0 matched, 0 org-digests sent.
+[2026-06-28 11:25:15.787] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] Scheduled tender-match scan started — every "00:15:00".
+[2026-06-28 11:25:17.629] [INF] [BiddingBuddyBFF] [cid:b3f82d21-adcd-4bd3-ba56-fbf3297f903b] HTTP GET /swagger/index.html responded 200 in 102.2688 ms
+[2026-06-28 11:25:18.410] [INF] [BiddingBuddyBFF] [cid:8dd5ebbf-fa39-4ed0-80cf-1d63f087f429] HTTP GET /swagger/v1/swagger.json responded 200 in 415.8433 ms
+[2026-06-28 11:25:34.046] [ERR] [BiddingBuddyBFF] [cid:] Failed executing DbCommand (247ms) [Parameters=[@__p_0='?' (DbType = Int32)], CommandType='"Text"', CommandTimeout='30']
+SELECT t.id, t.ai_score, t.ai_summary, t.ai_tags, t.alerts_scanned_at, t.buyer_org_id_gem, t.buyer_org_name, t.category, t.city, t.closing_date, t.corrigendum_count, t.created_at, t.delivery_days, t.description, t.eligibility_score, t.emd_amount, t.gem_tender_id, t.mongo_tender_id, t.published_date, t.raw_data, t.risk_score, t.source, t.state, t.status, t.sub_category, t.tender_value, t.title, t.updated_at, t.win_probability
+FROM tenders AS t
+WHERE t.alerts_scanned_at IS NULL
+ORDER BY t.created_at
+LIMIT @__p_0
+[2026-06-28 11:25:34.199] [ERR] [BiddingBuddyBFF] [cid:] An exception occurred while iterating over the results of a query for context type 'BiddingBuddy.Bff.Infrastructure.Persistence.BffDbContext'.
+Npgsql.PostgresException (0x80004005): 42703: column t.mongo_tender_id does not exist
+
+POSITION: 265
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.InitializeReaderAsync(AsyncEnumerator enumerator, CancellationToken cancellationToken)
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+  Exception data:
+    Severity: ERROR
+    SqlState: 42703
+    MessageText: column t.mongo_tender_id does not exist
+    Position: 265
+    File: parse_relation.c
+    Line: 3716
+    Routine: errorMissingColumn
+Npgsql.PostgresException (0x80004005): 42703: column t.mongo_tender_id does not exist
+
+POSITION: 265
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.InitializeReaderAsync(AsyncEnumerator enumerator, CancellationToken cancellationToken)
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+  Exception data:
+    Severity: ERROR
+    SqlState: 42703
+    MessageText: column t.mongo_tender_id does not exist
+    Position: 265
+    File: parse_relation.c
+    Line: 3716
+    Routine: errorMissingColumn
+[2026-06-28 11:25:34.409] [ERR] [BiddingBuddyBFF] [cid:] [MatchScan] Scan run failed; will retry on the next tick.
+Npgsql.PostgresException (0x80004005): 42703: column t.mongo_tender_id does not exist
+
+POSITION: 265
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.InitializeReaderAsync(AsyncEnumerator enumerator, CancellationToken cancellationToken)
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+   at Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync[TSource](IQueryable`1 source, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync[TSource](IQueryable`1 source, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.MatchingService.ScanNewTendersAsync(Int32 batchSize, Boolean rearmFirst, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\MatchingService.cs:line 125
+   at BiddingBuddy.Bff.Api.Workers.TenderMatchScanWorker.ExecuteAsync(CancellationToken stoppingToken) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Workers\TenderMatchScanWorker.cs:line 46
+  Exception data:
+    Severity: ERROR
+    SqlState: 42703
+    MessageText: column t.mongo_tender_id does not exist
+    Position: 265
+    File: parse_relation.c
+    Line: 3716
+    Routine: errorMissingColumn
+[2026-06-28 11:25:42.705] [WRN] [BiddingBuddyBFF] [cid:d1ba51c4-f953-4bcb-b8be-b342039b7d41] Failed to determine the https port for redirect.
+[2026-06-28 11:25:43.106] [INF] [BiddingBuddyBFF] [cid:d1ba51c4-f953-4bcb-b8be-b342039b7d41] HTTP GET /internal/migrations responded 200 in 412.9594 ms
+[2026-06-28 11:25:55.634] [INF] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] Applied migration 0010_add_tender_mongo_id.sql
+[2026-06-28 11:25:55.805] [INF] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] Applied migration 0011_add_alert_cadence.sql
+[2026-06-28 11:25:55.965] [INF] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] Applied migration 0012_redesign_tender_match_email.sql
+[2026-06-28 11:25:56.283] [ERR] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] Migration 0013_add_bid_status_category.sql failed; rolled back. Aborting remaining migrations.
+Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+[2026-06-28 11:25:56.734] [ERR] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] An unhandled exception has occurred while executing the request.
+System.InvalidOperationException: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+ ---> Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+   --- End of inner exception stack trace ---
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Api.Controllers.MigrationsController.Apply(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Controllers\MigrationsController.cs:line 36
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at BiddingBuddy.Bff.Api.Middleware.OrgContextMiddleware.InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Middleware\OrgContextMiddleware.cs:line 20
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+[2026-06-28 11:25:56.757] [WRN] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] Request rejected → 400 Bad Request: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+System.InvalidOperationException: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+ ---> Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+   --- End of inner exception stack trace ---
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Api.Controllers.MigrationsController.Apply(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Controllers\MigrationsController.cs:line 36
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at BiddingBuddy.Bff.Api.Middleware.OrgContextMiddleware.InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Middleware\OrgContextMiddleware.cs:line 20
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+[2026-06-28 11:25:56.789] [INF] [BiddingBuddyBFF] [cid:ca70d692-066b-4e5d-9f46-e4022e7360d5] HTTP POST /internal/migrations responded 400 in 1483.3832 ms
+[2026-06-28 11:25:59.963] [ERR] [BiddingBuddyBFF] [cid:5d974003-dbc2-4b3f-a550-30f079839a35] Migration 0013_add_bid_status_category.sql failed; rolled back. Aborting remaining migrations.
+Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+[2026-06-28 11:26:00.416] [ERR] [BiddingBuddyBFF] [cid:5d974003-dbc2-4b3f-a550-30f079839a35] An unhandled exception has occurred while executing the request.
+System.InvalidOperationException: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+ ---> Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+   --- End of inner exception stack trace ---
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Api.Controllers.MigrationsController.Apply(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Controllers\MigrationsController.cs:line 36
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at BiddingBuddy.Bff.Api.Middleware.OrgContextMiddleware.InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Middleware\OrgContextMiddleware.cs:line 20
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+[2026-06-28 11:26:00.436] [WRN] [BiddingBuddyBFF] [cid:5d974003-dbc2-4b3f-a550-30f079839a35] Request rejected → 400 Bad Request: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+System.InvalidOperationException: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+ ---> Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+   --- End of inner exception stack trace ---
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Api.Controllers.MigrationsController.Apply(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Controllers\MigrationsController.cs:line 36
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at BiddingBuddy.Bff.Api.Middleware.OrgContextMiddleware.InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Middleware\OrgContextMiddleware.cs:line 20
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+[2026-06-28 11:26:00.454] [INF] [BiddingBuddyBFF] [cid:5d974003-dbc2-4b3f-a550-30f079839a35] HTTP POST /internal/migrations responded 400 in 868.7548 ms
+[2026-06-28 11:26:20.539] [INF] [BiddingBuddyBFF] [cid:0b3392bd-aa83-4dcf-bed6-8a5f643a5af5] HTTP GET /internal/migrations responded 200 in 105.5204 ms
+[2026-06-28 11:30:13.514] [INF] [BiddingBuddyBFF] [cid:351e4dc7-41f5-4df7-afaa-8a8f084b8066] HTTP GET /swagger/index.html responded 200 in 44.6720 ms
+[2026-06-28 11:30:14.083] [INF] [BiddingBuddyBFF] [cid:4b85b62c-0d4d-4b38-a4fd-10f426782b27] HTTP GET /swagger/favicon-32x32.png responded 200 in 60.9574 ms
+[2026-06-28 11:30:15.836] [INF] [BiddingBuddyBFF] [cid:9e466800-6bc6-4526-9db8-bae58f171c38] HTTP GET /swagger/v1/swagger.json responded 200 in 1842.7775 ms
+[2026-06-28 11:30:46.692] [INF] [BiddingBuddyBFF] [cid:aab9168c-aeba-450c-9c42-deae107624f8] HTTP GET /internal/migrations responded 200 in 438.9289 ms
+[2026-06-28 11:31:01.918] [ERR] [BiddingBuddyBFF] [cid:0deb08cb-0868-49b1-9029-a4a5563cb476] Migration 0013_add_bid_status_category.sql failed; rolled back. Aborting remaining migrations.
+Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+[2026-06-28 11:31:02.393] [ERR] [BiddingBuddyBFF] [cid:0deb08cb-0868-49b1-9029-a4a5563cb476] An unhandled exception has occurred while executing the request.
+System.InvalidOperationException: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+ ---> Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+   --- End of inner exception stack trace ---
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Api.Controllers.MigrationsController.Apply(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Controllers\MigrationsController.cs:line 36
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at BiddingBuddy.Bff.Api.Middleware.OrgContextMiddleware.InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Middleware\OrgContextMiddleware.cs:line 20
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+[2026-06-28 11:31:02.418] [WRN] [BiddingBuddyBFF] [cid:0deb08cb-0868-49b1-9029-a4a5563cb476] Request rejected → 400 Bad Request: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+System.InvalidOperationException: Migration '0013_add_bid_status_category.sql' failed and was rolled back: 42601: syntax error at or near "</"
+
+POSITION: 1
+ ---> Npgsql.PostgresException (0x80004005): 42601: syntax error at or near "</"
+
+POSITION: 1
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteNonQuery(Boolean async, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 64
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 65
+  Exception data:
+    Severity: ERROR
+    SqlState: 42601
+    MessageText: syntax error at or near "</"
+    Position: 1
+    File: scan.l
+    Line: 1244
+    Routine: scanner_yyerror
+   --- End of inner exception stack trace ---
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Infrastructure.Services.DbMigrator.ApplyPendingAsync(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\DbMigrator.cs:line 82
+   at BiddingBuddy.Bff.Api.Controllers.MigrationsController.Apply(CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Controllers\MigrationsController.cs:line 36
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.TaskOfIActionResultExecutor.Execute(ActionContext actionContext, IActionResultTypeMapper mapper, ObjectMethodExecutor executor, Object controller, Object[] arguments)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeActionMethodAsync>g__Awaited|12_0(ControllerActionInvoker invoker, ValueTask`1 actionResultValueTask)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeNextActionFilterAsync>g__Awaited|10_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.<InvokeInnerFilterAsync>g__Awaited|13_0(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at BiddingBuddy.Bff.Api.Middleware.OrgContextMiddleware.InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Middleware\OrgContextMiddleware.cs:line 20
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>g__Awaited|10_0(ExceptionHandlerMiddlewareImpl middleware, HttpContext context, Task task)
+[2026-06-28 11:31:02.443] [INF] [BiddingBuddyBFF] [cid:0deb08cb-0868-49b1-9029-a4a5563cb476] HTTP POST /internal/migrations responded 400 in 1056.6203 ms
+[2026-06-28 11:31:32.669] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] Scheduled tender-match scan started — every "00:15:00".

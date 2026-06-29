@@ -1,0 +1,96 @@
+[2026-06-27 00:01:01.182] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] Scheduled tender-match scan started — every "00:15:00".
+[2026-06-27 00:01:04.518] [INF] [BiddingBuddyBFF] [cid:d8ddf0f7-ec68-41e5-8d85-286f1260012c] HTTP GET /swagger/index.html responded 200 in 93.8931 ms
+[2026-06-27 00:01:09.138] [INF] [BiddingBuddyBFF] [cid:176228f9-9f78-4d60-b8e6-1b0d20b060dd] HTTP GET /swagger/v1/swagger.json responded 200 in 3970.0170 ms
+[2026-06-27 00:01:20.947] [ERR] [BiddingBuddyBFF] [cid:] Failed executing DbCommand (370ms) [Parameters=[@__p_0='?' (DbType = Int32)], CommandType='"Text"', CommandTimeout='30']
+SELECT t.id, t.ai_score, t.ai_summary, t.ai_tags, t.alerts_scanned_at, t.buyer_org_id_gem, t.buyer_org_name, t.category, t.city, t.closing_date, t.corrigendum_count, t.created_at, t.delivery_days, t.description, t.eligibility_score, t.emd_amount, t.enrichment_notified_at, t.enrichment_status, t.gem_tender_id, t.published_date, t.raw_data, t.risk_score, t.source, t.state, t.status, t.sub_category, t.tender_value, t.title, t.updated_at, t.win_probability
+FROM tenders AS t
+WHERE t.alerts_scanned_at IS NULL
+ORDER BY t.created_at
+LIMIT @__p_0
+[2026-06-27 00:01:21.096] [ERR] [BiddingBuddyBFF] [cid:] An exception occurred while iterating over the results of a query for context type 'BiddingBuddy.Bff.Infrastructure.Persistence.BffDbContext'.
+Npgsql.PostgresException (0x80004005): 42703: column t.enrichment_notified_at does not exist
+
+POSITION: 248
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.InitializeReaderAsync(AsyncEnumerator enumerator, CancellationToken cancellationToken)
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+  Exception data:
+    Severity: ERROR
+    SqlState: 42703
+    MessageText: column t.enrichment_notified_at does not exist
+    Position: 248
+    File: parse_relation.c
+    Line: 3716
+    Routine: errorMissingColumn
+Npgsql.PostgresException (0x80004005): 42703: column t.enrichment_notified_at does not exist
+
+POSITION: 248
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.InitializeReaderAsync(AsyncEnumerator enumerator, CancellationToken cancellationToken)
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+  Exception data:
+    Severity: ERROR
+    SqlState: 42703
+    MessageText: column t.enrichment_notified_at does not exist
+    Position: 248
+    File: parse_relation.c
+    Line: 3716
+    Routine: errorMissingColumn
+[2026-06-27 00:01:21.347] [ERR] [BiddingBuddyBFF] [cid:] [MatchScan] Scan run failed; will retry on the next tick.
+Npgsql.PostgresException (0x80004005): 42703: column t.enrichment_notified_at does not exist
+
+POSITION: 248
+   at Npgsql.Internal.NpgsqlConnector.ReadMessageLong(Boolean async, DataRowLoadingMode dataRowLoadingMode, Boolean readingNotifications, Boolean isReadingPrependedMessage)
+   at System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1.StateMachineBox`1.System.Threading.Tasks.Sources.IValueTaskSource<TResult>.GetResult(Int16 token)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlDataReader.NextResult(Boolean async, Boolean isConsuming, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteReader(Boolean async, CommandBehavior behavior, CancellationToken cancellationToken)
+   at Npgsql.NpgsqlCommand.ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Storage.RelationalCommand.ExecuteReaderAsync(RelationalCommandParameterObject parameterObject, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.InitializeReaderAsync(AsyncEnumerator enumerator, CancellationToken cancellationToken)
+   at Npgsql.EntityFrameworkCore.PostgreSQL.Storage.Internal.NpgsqlExecutionStrategy.ExecuteAsync[TState,TResult](TState state, Func`4 operation, Func`4 verifySucceeded, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+   at Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync[TSource](IQueryable`1 source, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync[TSource](IQueryable`1 source, CancellationToken cancellationToken)
+   at BiddingBuddy.Bff.Infrastructure.Services.MatchingService.ScanNewTendersAsync(Int32 batchSize, Boolean rearmFirst, CancellationToken ct) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Infrastructure\Services\MatchingService.cs:line 126
+   at BiddingBuddy.Bff.Api.Workers.TenderMatchScanWorker.ExecuteAsync(CancellationToken stoppingToken) in C:\proj\BiddingBuddy\BiddingBuddyBFF\src\BiddingBuddy.Bff.Api\Workers\TenderMatchScanWorker.cs:line 46
+  Exception data:
+    Severity: ERROR
+    SqlState: 42703
+    MessageText: column t.enrichment_notified_at does not exist
+    Position: 248
+    File: parse_relation.c
+    Line: 3716
+    Routine: errorMissingColumn
+[2026-06-27 00:04:25.727] [WRN] [BiddingBuddyBFF] [cid:e4b16927-dc0c-4a32-a57f-998a50c4bfec] Failed to determine the https port for redirect.
+[2026-06-27 00:04:26.293] [INF] [BiddingBuddyBFF] [cid:e4b16927-dc0c-4a32-a57f-998a50c4bfec] HTTP GET /internal/migrations responded 200 in 587.8917 ms
+[2026-06-27 00:04:33.215] [INF] [BiddingBuddyBFF] [cid:4e0674ed-55ca-48b8-8688-a9f707ad93ea] Applied migration 0010_add_enrichment_entitlements.sql
+[2026-06-27 00:04:33.456] [INF] [BiddingBuddyBFF] [cid:4e0674ed-55ca-48b8-8688-a9f707ad93ea] Applied migration 0011_add_enrichment_ready_template.sql
+[2026-06-27 00:04:33.470] [INF] [BiddingBuddyBFF] [cid:4e0674ed-55ca-48b8-8688-a9f707ad93ea] HTTP POST /internal/migrations responded 200 in 756.0612 ms
+[2026-06-27 00:04:41.554] [INF] [BiddingBuddyBFF] [cid:76f63aa5-13a7-4e19-bc0c-59988bd46a79] HTTP POST /internal/migrations responded 200 in 145.9181 ms
+[2026-06-27 00:04:57.893] [INF] [BiddingBuddyBFF] [cid:a9dea9bb-844d-4e9c-a721-1a7ee5201774] HTTP POST /internal/migrations responded 200 in 115.9978 ms
+[2026-06-27 00:05:08.403] [INF] [BiddingBuddyBFF] [cid:44efcd2b-050f-4596-9159-e92819353b83] HTTP GET /internal/migrations responded 200 in 202.9921 ms
+[2026-06-27 00:05:21.067] [INF] [BiddingBuddyBFF] [cid:] [MatchScan] Scheduled tender-match scan started — every "00:15:00".
+[2026-06-27 00:05:22.609] [INF] [BiddingBuddyBFF] [cid:dd2b7f65-95ff-4639-93c1-380663cd33be] HTTP GET /swagger/index.html responded 200 in 131.9245 ms
+[2026-06-27 00:05:23.365] [INF] [BiddingBuddyBFF] [cid:5e311056-e23c-4e8c-8caa-9215494ec8f8] HTTP GET /swagger/v1/swagger.json responded 200 in 488.8308 ms
+[2026-06-27 00:05:38.651] [INF] [BiddingBuddyBFF] [cid:] [Match] Scan complete — 0 scanned, 0 new match(es), 0 org-digest(s) sent.

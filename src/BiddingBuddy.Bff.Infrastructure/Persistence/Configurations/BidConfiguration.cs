@@ -16,6 +16,10 @@ public class BidConfiguration : IEntityTypeConfiguration<Bid>
         b.Property(x => x.Title).HasColumnName("title").IsRequired();
         b.Property(x => x.Description).HasColumnName("description");
         b.Property(x => x.Stage).HasColumnName("stage").HasDefaultValue("identified");
+        b.Property(x => x.StatusCategory).HasColumnName("status_category")
+            .HasComputedColumnSql(
+                "CASE WHEN stage IN ('won','lost','dropped') THEN 'closed' ELSE 'open' END",
+                stored: true);
         b.Property(x => x.Priority).HasColumnName("priority").HasDefaultValue("medium");
         b.Property(x => x.AssignedTo).HasColumnName("assigned_to");
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
@@ -31,6 +35,7 @@ public class BidConfiguration : IEntityTypeConfiguration<Bid>
 
         b.HasIndex(x => x.OrgId);
         b.HasIndex(x => new { x.OrgId, x.Stage });
+        b.HasIndex(x => new { x.OrgId, x.StatusCategory });
         b.HasIndex(x => x.AssignedTo);
 
         b.HasOne(x => x.Organization).WithMany(x => x.Bids).HasForeignKey(x => x.OrgId);

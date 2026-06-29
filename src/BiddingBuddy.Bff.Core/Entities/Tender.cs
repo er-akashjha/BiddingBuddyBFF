@@ -4,6 +4,12 @@ public class Tender
 {
     public Guid Id { get; set; }
     public string GemTenderId { get; set; } = default!;
+
+    // The tender's MongoDB _id in BiddingBuddyServices — the portal-independent id the
+    // SPA's /tenders/:id route resolves by. Stored so digest-email links point at the
+    // right tender (the Postgres Id is a different id-space). NULL until the pipeline
+    // re-enriches this tender after migration 0010.
+    public string? MongoTenderId { get; set; }
     public string Title { get; set; } = default!;
     public string? Description { get; set; }
     public string? BuyerOrgName { get; set; }

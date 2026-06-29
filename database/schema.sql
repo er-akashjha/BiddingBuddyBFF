@@ -170,6 +170,7 @@ CREATE INDEX idx_org_members_org_id  ON org_members (org_id);
 CREATE TABLE tenders (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   gem_tender_id       TEXT NOT NULL UNIQUE,
+  mongo_tender_id     TEXT,                       -- BiddingBuddyServices _id; portal-independent id the SPA links by (migration 0010)
   title               TEXT NOT NULL,
   description         TEXT,
   buyer_org_name      TEXT,
@@ -199,6 +200,7 @@ CREATE TABLE tenders (
 );
 
 CREATE INDEX idx_tenders_gem_id      ON tenders (gem_tender_id);
+CREATE UNIQUE INDEX idx_tenders_mongo_tender_id ON tenders (mongo_tender_id) WHERE mongo_tender_id IS NOT NULL;
 CREATE INDEX idx_tenders_closing     ON tenders (closing_date);
 CREATE INDEX idx_tenders_status      ON tenders (status);
 CREATE INDEX idx_tenders_category    ON tenders (category);
@@ -252,7 +254,9 @@ CREATE TABLE bids (
   title            TEXT NOT NULL,
   description      TEXT,
   stage            TEXT NOT NULL DEFAULT 'identified'
-                     CHECK (stage IN ('identified','reviewing','preparing','approval','submitted','won','lost')),
+                     CHECK (stage IN ('identified','reviewing','preparing','approval','submitted','won','lost','dropped')),
+  status_category  TEXT GENERATED ALWAYS AS
+                     (CASE WHEN stage IN ('won','lost','dropped') THEN 'closed' ELSE 'open' END) STORED,
   priority         TEXT NOT NULL DEFAULT 'medium'
                      CHECK (priority IN ('low','medium','high','critical')),
   assigned_to      UUID REFERENCES users(id),
@@ -268,9 +272,10 @@ CREATE TABLE bids (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_bids_org_id    ON bids (org_id);
-CREATE INDEX idx_bids_org_stage ON bids (org_id, stage);
-CREATE INDEX idx_bids_assigned  ON bids (assigned_to);
+CREATE INDEX idx_bids_org_id          ON bids (org_id);
+CREATE INDEX idx_bids_org_stage       ON bids (org_id, stage);
+CREATE INDEX idx_bids_org_status_cat  ON bids (org_id, status_category);
+CREATE INDEX idx_bids_assigned        ON bids (assigned_to);
 
 CREATE TRIGGER trg_bids_updated_at
   BEFORE UPDATE ON bids
@@ -306,19 +311,39 @@ CREATE TABLE bid_checklist_items (
 CREATE INDEX idx_bid_checklist_bid_id ON bid_checklist_items (bid_id);
 
 CREATE TABLE bid_comments (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bid_id       UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
-  author_id    UUID NOT NULL REFERENCES users(id),
-  body         TEXT NOT NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bid_id            UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
+  author_id         UUID NOT NULL REFERENCES users(id),
+  body              TEXT NOT NULL,
+  checklist_item_id UUID REFERENCES bid_checklist_items(id) ON DELETE SET NULL,
+  kind              TEXT NOT NULL DEFAULT 'comment' CHECK (kind IN ('comment','task_completion')),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_bid_comments_bid_id ON bid_comments (bid_id);
+CREATE INDEX idx_bid_comments_checklist_item ON bid_comments (checklist_item_id);
 
 CREATE TRIGGER trg_bid_comments_updated_at
   BEFORE UPDATE ON bid_comments
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE bid_attachments (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id            UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  bid_id            UUID NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
+  checklist_item_id UUID REFERENCES bid_checklist_items(id) ON DELETE SET NULL,
+  comment_id        UUID REFERENCES bid_comments(id) ON DELETE SET NULL,
+  file_name         TEXT   NOT NULL,
+  content_type      TEXT   NOT NULL,
+  size_bytes        BIGINT NOT NULL,
+  storage_key       TEXT   NOT NULL,
+  uploaded_by       UUID   NOT NULL REFERENCES users(id),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bid_attachments_bid     ON bid_attachments (bid_id);
+CREATE INDEX idx_bid_attachments_comment ON bid_attachments (comment_id);
 
 -- ─────────────────────────────────────────────────────────────────
 -- 5. COMPLIANCE

@@ -26,6 +26,21 @@ public class InternalController(IInternalPipelineService pipelineService) : Cont
         return result.Created ? StatusCode(201, result) : Ok(result);
     }
 
+    /// <summary>
+    /// One-time backfill of <c>mongo_tender_id</c> for tenders that predate migration 0010.
+    /// Processes one bounded batch (<paramref name="batchSize"/>, default 200, max 1000) and
+    /// returns counts incl. <c>remaining</c> — call repeatedly until <c>remaining</c> is 0.
+    /// Idempotent: already-populated rows are skipped (filtered on NULL).
+    /// </summary>
+    [HttpPost("tenders/backfill-mongo-id")]
+    [ProducesResponseType(typeof(BackfillTenderMongoIdResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> BackfillTenderMongoIds([FromQuery] int batchSize = 200, CancellationToken ct = default)
+    {
+        var result = await pipelineService.BackfillTenderMongoIdsAsync(batchSize, ct);
+        return Ok(result);
+    }
+
     /// <summary>Store extracted text content from a tender document (PDF).</summary>
     [HttpPost("tenders/{gemTenderId}/documents")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

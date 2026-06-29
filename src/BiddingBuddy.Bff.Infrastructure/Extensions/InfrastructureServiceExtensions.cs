@@ -88,6 +88,7 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IOrganizationService, OrganizationService>();
         services.AddScoped<ITenderService, TenderService>();
         services.AddScoped<IBidService, BidService>();
+        services.AddScoped<IBidAttachmentService, BidAttachmentService>();
         services.AddScoped<IComplianceService, ComplianceService>();
         services.AddScoped<IDocumentService, DocumentService>();
         services.AddScoped<IOrderService, OrderService>();

@@ -8,6 +8,13 @@ public class Bid
     public string Title { get; set; } = default!;
     public string? Description { get; set; }
     public string Stage { get; set; } = "identified";
+
+    /// <summary>
+    /// Derived (open|closed) — a generated, read-only column in Postgres (migration 0013).
+    /// Never assigned in app code; EF reads it back after save.
+    /// </summary>
+    public string StatusCategory { get; private set; } = "open";
+
     public string Priority { get; set; } = "medium";
     public Guid? AssignedTo { get; set; }
     public Guid CreatedBy { get; set; }

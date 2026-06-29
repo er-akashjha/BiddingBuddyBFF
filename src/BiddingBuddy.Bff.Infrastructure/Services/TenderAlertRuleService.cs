@@ -65,7 +65,7 @@ public class TenderAlertRuleService(BffDbContext db) : ITenderAlertRuleService
     {
         var s = await db.OrgAlertSettings.FirstOrDefaultAsync(x => x.OrgId == orgId, ct);
         return s is null
-            ? new OrgAlertSettingsDto(true, 10, ["Email", "InApp"], ["owner", "admin", "bid_manager"])
+            ? new OrgAlertSettingsDto(true, 10, 360, ["Email", "InApp"], ["owner", "admin", "bid_manager"])
             : MapSettings(s);
     }
 
@@ -80,6 +80,7 @@ public class TenderAlertRuleService(BffDbContext db) : ITenderAlertRuleService
 
         if (dto.IsEnabled.HasValue) s.IsEnabled = dto.IsEnabled.Value;
         if (dto.DigestSize.HasValue) s.DigestSize = Math.Clamp(dto.DigestSize.Value, 1, 50);
+        if (dto.MinSendIntervalMinutes.HasValue) s.MinSendIntervalMinutes = Math.Clamp(dto.MinSendIntervalMinutes.Value, 15, 10080);
         if (dto.NotifyChannels is not null) s.NotifyChannels = dto.NotifyChannels;
         if (dto.NotifyRoles is not null) s.NotifyRoles = dto.NotifyRoles;
 
@@ -102,5 +103,5 @@ public class TenderAlertRuleService(BffDbContext db) : ITenderAlertRuleService
         r.MinValue, r.MaxValue, r.MinAiScore, r.IsActive, r.CreatedAt, r.UpdatedAt);
 
     private static OrgAlertSettingsDto MapSettings(OrgAlertSettings s) => new(
-        s.IsEnabled, s.DigestSize, s.NotifyChannels, s.NotifyRoles);
+        s.IsEnabled, s.DigestSize, s.MinSendIntervalMinutes, s.NotifyChannels, s.NotifyRoles);
 }

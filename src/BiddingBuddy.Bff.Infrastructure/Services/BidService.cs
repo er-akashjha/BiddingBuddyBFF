@@ -1,41 +1,182 @@
+using BiddingBuddy.Bff.Core.Constants;
 using BiddingBuddy.Bff.Core.DTOs.Bids;
 using BiddingBuddy.Bff.Core.DTOs.Common;
+using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
-public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesClient) : IBidService
+public class BidService(
+    BffDbContext db,
+    IBiddingBuddyServicesClient servicesClient,
+    INotificationPublisher notificationPublisher,
+    ILogger<BidService> logger) : IBidService
 {
     public async Task<PagedResult<BidListItemDto>> ListAsync(
-        Guid orgId, string? stage, string? priority, int page, int pageSize, CancellationToken ct = default)
+        Guid orgId, Guid currentUserId, BidListQuery q, CancellationToken ct = default)
     {
         var query = db.Bids.Where(b => b.OrgId == orgId);
-        if (!string.IsNullOrWhiteSpace(stage))    query = query.Where(b => b.Stage == stage);
-        if (!string.IsNullOrWhiteSpace(priority)) query = query.Where(b => b.Priority == priority);
+
+        if (!string.IsNullOrWhiteSpace(q.Stage))    query = query.Where(b => b.Stage == q.Stage);
+        if (!string.IsNullOrWhiteSpace(q.Priority)) query = query.Where(b => b.Priority == q.Priority);
+
+        if (!string.IsNullOrWhiteSpace(q.StatusCategory))
+        {
+            if (!BidStages.IsValidStatusCategory(q.StatusCategory))
+                throw new ArgumentException($"Invalid statusCategory '{q.StatusCategory}'. Allowed: open, closed.", nameof(q));
+            query = query.Where(b => b.StatusCategory == q.StatusCategory);
+        }
+
+        if (q.AssignedTo.HasValue) query = query.Where(b => b.AssignedTo == q.AssignedTo);
+        if (q.DueBefore.HasValue)  query = query.Where(b => b.DueDate != null && b.DueDate <= q.DueBefore);
+
+        if (!string.IsNullOrWhiteSpace(q.Q))
+        {
+            var like = $"%{q.Q.Trim()}%";
+            query = query.Where(b =>
+                EF.Functions.ILike(b.Title, like) ||
+                (b.Tender != null && b.Tender.GemTenderId != null && EF.Functions.ILike(b.Tender.GemTenderId, like)));
+        }
 
         var total = await query.CountAsync(ct);
-        var pg    = Math.Max(1, page);
-        var sz    = Math.Clamp(pageSize, 1, 100);
+        var pg    = Math.Max(1, q.Page);
+        var sz    = Math.Clamp(q.PageSize, 1, 100);
 
-        var bids = await query
+        var bids = await ApplySort(query, q.Sort)
             .Include(b => b.AssignedUser)
             .Include(b => b.Tender)
-            .OrderByDescending(b => b.UpdatedAt)
             .Skip((pg - 1) * sz)
             .Take(sz)
             .ToListAsync(ct);
 
+        var summaries = await TaskSummariesAsync(bids.Select(b => b.Id).ToList(), currentUserId, ct);
+
         var items = bids.Select(b => new BidListItemDto(
-            b.Id, b.Title, b.Stage, b.Priority, b.DueDate,
+            b.Id, b.Title, b.Stage, b.StatusCategory, b.Priority, b.DueDate,
             b.TenderValue, b.OurBidValue, b.WinProbability, b.ProgressPct,
             b.AssignedTo, b.AssignedUser?.Name,
-            b.TenderId, b.Tender?.GemTenderId, b.UpdatedAt)).ToList();
+            b.TenderId, b.Tender?.GemTenderId, b.UpdatedAt,
+            summaries.GetValueOrDefault(b.Id, new TaskSummaryDto(0, 0, 0, 0)))).ToList();
 
         return new PagedResult<BidListItemDto>(items, total, pg, sz);
+    }
+
+    /// <summary>
+    /// Per-bid checklist roll-up for the given bid ids, in one grouped query (no N+1).
+    /// <paramref name="currentUserId"/> drives the <c>MineOpen</c> count.
+    /// </summary>
+    private async Task<Dictionary<Guid, TaskSummaryDto>> TaskSummariesAsync(
+        IReadOnlyCollection<Guid> bidIds, Guid currentUserId, CancellationToken ct)
+    {
+        if (bidIds.Count == 0) return [];
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        var rows = await db.BidChecklistItems
+            .Where(i => bidIds.Contains(i.BidId))
+            .GroupBy(i => i.BidId)
+            .Select(g => new
+            {
+                BidId    = g.Key,
+                Total    = g.Count(),
+                Done     = g.Count(i => i.IsDone),
+                Overdue  = g.Count(i => !i.IsDone && i.DueDate != null && i.DueDate < today),
+                MineOpen = g.Count(i => !i.IsDone && i.AssignedTo == currentUserId),
+            })
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(r => r.BidId, r => new TaskSummaryDto(r.Total, r.Done, r.Overdue, r.MineOpen));
+    }
+
+    public async Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(
+        Guid orgId, Guid userId, string? status, CancellationToken ct = default)
+    {
+        var query =
+            from i in db.BidChecklistItems
+            join b in db.Bids on i.BidId equals b.Id
+            where i.OrgId == orgId && i.AssignedTo == userId
+            select new { i.Id, i.BidId, BidTitle = b.Title, b.Stage, ItemTitle = i.Title, i.DueDate, i.IsDone };
+
+        if (string.Equals(status, "open", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => !x.IsDone);
+        else if (string.Equals(status, "done", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(x => x.IsDone);
+
+        var rows = await query.ToListAsync(ct);
+
+        return rows
+            .Select(x => new MyTaskDto(
+                x.Id, x.BidId, x.BidTitle, x.Stage, x.ItemTitle, x.DueDate, x.IsDone,
+                TaskBucket(x.DueDate, x.IsDone)))
+            // overdue first, then soonest due; undated last; done at the very end
+            .OrderBy(t => t.IsDone)
+            .ThenBy(t => t.DueDate ?? DateOnly.MaxValue)
+            .ToList();
+    }
+
+    /// <summary>Buckets a task by due date for the "My work" view.</summary>
+    private static string TaskBucket(DateOnly? due, bool done)
+    {
+        if (done) return "done";
+        if (due is null) return "later";
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (due < today) return "overdue";
+        if (due == today) return "today";
+        if (due <= today.AddDays(7)) return "week";
+        return "later";
+    }
+
+    public async Task<IReadOnlyList<BidByTenderDto>> GetByTenderIdsAsync(
+        Guid orgId, IReadOnlyCollection<Guid> tenderIds, CancellationToken ct = default)
+    {
+        if (tenderIds is null || tenderIds.Count == 0)
+            return [];
+
+        // Distinct + capped: this backs a single tender-list page (≤100 rows), so bound the
+        // IN (...) list defensively rather than trusting the caller.
+        var ids = tenderIds.Distinct().Take(100).ToList();
+
+        var bids = await db.Bids
+            .Where(b => b.OrgId == orgId && b.TenderId != null && ids.Contains(b.TenderId.Value))
+            .Include(b => b.AssignedUser)
+            .OrderByDescending(b => b.UpdatedAt)
+            .ToListAsync(ct);
+
+        // One entry per tender — the most recently updated bid wins when a tender has several.
+        return bids
+            .GroupBy(b => b.TenderId!.Value)
+            .Select(g => g.First()) // list is already newest-first
+            .Select(b => new BidByTenderDto(b.TenderId!.Value, b.Id, b.AssignedTo, b.AssignedUser?.Name, b.Stage))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Whitelisted ordering. <paramref name="sort"/> is a field name with an optional
+    /// leading '-' for descending. Unknown fields are rejected (400) rather than silently
+    /// ignored. Default is most-recently-updated first.
+    /// </summary>
+    private static IQueryable<Bid> ApplySort(IQueryable<Bid> query, string? sort)
+    {
+        var key = sort?.Trim();
+        if (string.IsNullOrEmpty(key))
+            return query.OrderByDescending(b => b.UpdatedAt); // default: most recently updated first
+
+        var desc = key[0] == '-';
+        if (desc) key = key[1..];
+
+        return key switch
+        {
+            "updatedAt" => desc ? query.OrderByDescending(b => b.UpdatedAt) : query.OrderBy(b => b.UpdatedAt),
+            "dueDate"   => desc ? query.OrderByDescending(b => b.DueDate)   : query.OrderBy(b => b.DueDate),
+            "priority"  => desc ? query.OrderByDescending(b => b.Priority)  : query.OrderBy(b => b.Priority),
+            "title"     => desc ? query.OrderByDescending(b => b.Title)     : query.OrderBy(b => b.Title),
+            _ => throw new ArgumentException($"Invalid sort '{sort}'. Allowed: updatedAt, dueDate, priority, title (optionally prefixed with '-').", nameof(sort)),
+        };
     }
 
     public async Task<BidDetailDto> GetAsync(Guid bidId, Guid orgId, CancellationToken ct = default)
@@ -50,16 +191,24 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
         // canonical tender data lives in MongoDB (BiddingBuddyServices). If the user
         // picked a tender that hasn't been mirrored locally yet, fetch + upsert a stub
         // so the FK resolves.
+        if (!BidStages.IsValid(dto.Stage))
+            throw new ArgumentException($"Invalid stage '{dto.Stage}'. Allowed: {string.Join(", ", BidStages.All)}.", nameof(dto));
+
+        // The local tender row may already exist under a different primary key than the
+        // id the UI sent (the pipeline mirrors tenders with a Postgres-generated id, while
+        // the UI sends the Mongo _id). EnsureLocalTenderAsync resolves/creates the row and
+        // returns the id the bid's FK must actually point at.
+        Guid? localTenderId = dto.TenderId;
         if (dto.TenderId.HasValue)
         {
-            await EnsureLocalTenderAsync(dto.TenderId.Value, ct);
+            localTenderId = await EnsureLocalTenderAsync(dto.TenderId.Value, ct);
         }
 
         var bid = new Bid
         {
             Id            = Guid.NewGuid(),
             OrgId         = orgId,
-            TenderId      = dto.TenderId,
+            TenderId      = localTenderId,
             Title         = dto.Title,
             Description   = dto.Description,
             Stage         = dto.Stage,
@@ -88,6 +237,9 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
     {
         var bid = await LoadBidAsync(bidId, orgId, ct);
 
+        if (dto.Stage is not null && !BidStages.IsValid(dto.Stage))
+            throw new ArgumentException($"Invalid stage '{dto.Stage}'. Allowed: {string.Join(", ", BidStages.All)}.", nameof(dto));
+
         if (dto.Title          is not null) bid.Title          = dto.Title;
         if (dto.Description    is not null) bid.Description    = dto.Description;
         if (dto.Stage          is not null) bid.Stage          = dto.Stage;
@@ -107,6 +259,9 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
 
     public async Task<BidDetailDto> ChangeStageAsync(Guid bidId, Guid orgId, Guid actorId, ChangeStageDto dto, CancellationToken ct = default)
     {
+        if (!BidStages.IsValid(dto.Stage))
+            throw new ArgumentException($"Invalid stage '{dto.Stage}'. Allowed: {string.Join(", ", BidStages.All)}.", nameof(dto));
+
         var bid = await LoadBidAsync(bidId, orgId, ct);
         var fromStage = bid.Stage;
 
@@ -174,14 +329,32 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
     {
         await EnsureBidBelongsAsync(bidId, orgId, ct);
 
-        return await db.BidComments
+        var comments = await db.BidComments
             .Include(c => c.Author)
             .Where(c => c.BidId == bidId)
             .OrderBy(c => c.CreatedAt)
-            .Select(c => new BidCommentDto(
-                c.Id, c.BidId, c.AuthorId, c.Author.Name,
-                c.Body, c.CreatedAt, c.UpdatedAt))
             .ToListAsync(ct);
+
+        var commentIds = comments.Select(c => c.Id).ToList();
+        var attachments = await db.BidAttachments
+            .Include(a => a.Uploader)
+            .Where(a => a.CommentId != null && commentIds.Contains(a.CommentId!.Value))
+            .ToListAsync(ct);
+        var attByComment = attachments
+            .GroupBy(a => a.CommentId!.Value)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<BidAttachmentDto>)g.Select(MapAttachment).ToList());
+
+        var itemIds = comments.Where(c => c.ChecklistItemId != null).Select(c => c.ChecklistItemId!.Value).Distinct().ToList();
+        var itemTitles = await db.BidChecklistItems
+            .Where(i => itemIds.Contains(i.Id))
+            .ToDictionaryAsync(i => i.Id, i => i.Title, ct);
+
+        return comments.Select(c => new BidCommentDto(
+            c.Id, c.BidId, c.AuthorId, c.Author.Name,
+            c.Body, c.Kind, c.ChecklistItemId,
+            c.ChecklistItemId is Guid id ? itemTitles.GetValueOrDefault(id) : null,
+            attByComment.GetValueOrDefault(c.Id, []),
+            c.CreatedAt, c.UpdatedAt)).ToList();
     }
 
     public async Task<BidCommentDto> AddCommentAsync(Guid bidId, Guid orgId, Guid authorId, AddCommentDto dto, CancellationToken ct = default)
@@ -204,8 +377,12 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
         var authorName = await GetUserNameAsync(authorId, ct) ?? string.Empty;
         return new BidCommentDto(
             comment.Id, comment.BidId, comment.AuthorId, authorName,
-            comment.Body, comment.CreatedAt, comment.UpdatedAt);
+            comment.Body, comment.Kind, comment.ChecklistItemId, null, [],
+            comment.CreatedAt, comment.UpdatedAt);
     }
+
+    private static BidAttachmentDto MapAttachment(BidAttachment a)
+        => new(a.Id, a.FileName, a.ContentType, a.SizeBytes, a.UploadedBy, a.Uploader?.Name, a.CreatedAt);
 
     // ── Checklist ────────────────────────────────────────────────────────────
 
@@ -225,7 +402,7 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
             .ToListAsync(ct);
     }
 
-    public async Task<ChecklistItemDto> CreateChecklistItemAsync(Guid bidId, Guid orgId, CreateChecklistItemDto dto, CancellationToken ct = default)
+    public async Task<ChecklistItemDto> CreateChecklistItemAsync(Guid bidId, Guid orgId, Guid actorId, CreateChecklistItemDto dto, CancellationToken ct = default)
     {
         await EnsureBidBelongsAsync(bidId, orgId, ct);
 
@@ -241,6 +418,7 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
         db.BidChecklistItems.Add(item);
         await db.SaveChangesAsync(ct);
 
+        await NotifyTaskAssignedAsync(item, actorId, ct);
         return MapChecklist(item, await GetUserNameAsync(item.AssignedTo, ct));
     }
 
@@ -251,6 +429,8 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
         var item = await db.BidChecklistItems
             .FirstOrDefaultAsync(i => i.Id == itemId && i.BidId == bidId, ct)
             ?? throw new KeyNotFoundException("Checklist item not found.");
+
+        var previousAssignee = item.AssignedTo;
 
         if (dto.Title       is not null) item.Title      = dto.Title;
         if (dto.DueDate.HasValue)        item.DueDate    = dto.DueDate;
@@ -265,7 +445,132 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
         }
 
         await db.SaveChangesAsync(ct);
+
+        // Notify only when this update reassigned the task to a *different* person.
+        if (item.AssignedTo != previousAssignee)
+            await NotifyTaskAssignedAsync(item, actorId, ct);
+
         return MapChecklist(item, await GetUserNameAsync(item.AssignedTo, ct));
+    }
+
+    public async Task<CompleteChecklistResultDto> CompleteChecklistItemAsync(
+        Guid itemId, Guid bidId, Guid orgId, Guid actorId, CompleteChecklistItemDto dto, CancellationToken ct = default)
+    {
+        await EnsureBidBelongsAsync(bidId, orgId, ct);
+
+        if (string.IsNullOrWhiteSpace(dto.Note))
+            throw new ArgumentException("A note is required to close a task.", nameof(dto));
+
+        var item = await db.BidChecklistItems
+            .FirstOrDefaultAsync(i => i.Id == itemId && i.BidId == bidId, ct)
+            ?? throw new KeyNotFoundException("Checklist item not found.");
+
+        item.IsDone = true;
+        item.DoneAt = DateTime.UtcNow;
+        item.DoneBy = actorId;
+
+        var comment = new BidComment
+        {
+            Id              = Guid.NewGuid(),
+            BidId           = bidId,
+            AuthorId        = actorId,
+            Body            = dto.Note.Trim(),
+            ChecklistItemId = itemId,
+            Kind            = "task_completion",
+        };
+        db.BidComments.Add(comment);
+
+        // Link an optional, previously-registered attachment to this completion note.
+        if (dto.AttachmentId is Guid attId)
+        {
+            var att = await db.BidAttachments
+                .FirstOrDefaultAsync(a => a.Id == attId && a.BidId == bidId && a.OrgId == orgId, ct)
+                ?? throw new KeyNotFoundException("Attachment not found.");
+            att.CommentId = comment.Id;
+            att.ChecklistItemId = itemId;
+        }
+
+        await db.SaveChangesAsync(ct); // item + note (+ attachment link) in one transaction
+
+        var itemDto = MapChecklist(item, await GetUserNameAsync(item.AssignedTo, ct));
+
+        var authorName = await GetUserNameAsync(actorId, ct) ?? string.Empty;
+        var attachments = await db.BidAttachments
+            .Include(a => a.Uploader)
+            .Where(a => a.CommentId == comment.Id)
+            .ToListAsync(ct);
+        var noteDto = new BidCommentDto(
+            comment.Id, comment.BidId, comment.AuthorId, authorName,
+            comment.Body, comment.Kind, comment.ChecklistItemId, item.Title,
+            attachments.Select(MapAttachment).ToList(),
+            comment.CreatedAt, comment.UpdatedAt);
+
+        return new CompleteChecklistResultDto(itemDto, noteDto);
+    }
+
+    // ── Task-assigned notification (BID-301) ───────────────────────────────────
+
+    /// <summary>
+    /// Fire a TASK_ASSIGNED notification (InApp always; Email unless the assignee opted out).
+    /// No-op when the task is unassigned or assigned to the actor themselves. Never throws —
+    /// a notification hiccup must not fail the checklist write.
+    /// </summary>
+    private async Task NotifyTaskAssignedAsync(BidChecklistItem item, Guid assignerId, CancellationToken ct)
+    {
+        if (item.AssignedTo is not Guid assigneeId || assigneeId == assignerId)
+            return;
+
+        try
+        {
+            var assignee = await db.Users.FirstOrDefaultAsync(u => u.Id == assigneeId, ct);
+            if (assignee is null) return;
+
+            var bidTitle   = await db.Bids.Where(b => b.Id == item.BidId).Select(b => b.Title).FirstOrDefaultAsync(ct) ?? "a bid";
+            var assignerName = await GetUserNameAsync(assignerId, ct) ?? "A teammate";
+            var dueText = item.DueDate is DateOnly due ? $" It is due on {due:dd MMM yyyy}." : string.Empty;
+
+            var recipients = new List<NotificationRecipientDto>
+            {
+                new(NotificationChannel.InApp, assigneeId.ToString()),
+            };
+            if (await ShouldEmailTaskAssignedAsync(assigneeId, item.OrgId, ct))
+                recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, assignee.Email));
+
+            await notificationPublisher.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "TASK_ASSIGNED",
+                UserId:       assigneeId,
+                Payload: new Dictionary<string, object>
+                {
+                    ["AssigneeName"]   = assignee.Name,
+                    ["TaskTitle"]      = item.Title,
+                    ["BidTitle"]       = bidTitle,
+                    ["BidId"]          = item.BidId.ToString(),
+                    ["DueText"]        = dueText,
+                    ["AssignedByName"] = assignerName,
+                    ["ActionUrl"]      = $"/bids/{item.BidId}",
+                },
+                Recipients: recipients), ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TASK_ASSIGNED notification failed for item {ItemId}", item.Id);
+        }
+    }
+
+    /// <summary>
+    /// Email for task-assigned is opt-OUT (default on). A user disables it by setting their
+    /// email channel preference to disabled, or by curating an explicit event list that
+    /// excludes <c>task_assigned</c>.
+    /// </summary>
+    private async Task<bool> ShouldEmailTaskAssignedAsync(Guid userId, Guid orgId, CancellationToken ct)
+    {
+        var pref = await db.NotificationPreferences
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.OrgId == orgId && p.Channel == "email", ct);
+        if (pref is null) return true;
+        if (!pref.IsEnabled) return false;
+        if (pref.EventTypes.Length > 0 && !pref.EventTypes.Contains("task_assigned")) return false;
+        return true;
     }
 
     public async Task DeleteChecklistItemAsync(Guid itemId, Guid bidId, Guid orgId, CancellationToken ct = default)
@@ -283,14 +588,23 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Ensures a row exists in the local PostgreSQL <c>tenders</c> table for the given id.
-    /// The canonical tender lives in MongoDB via BiddingBuddyServices; we mirror a minimal
-    /// stub here so that the <c>bids.tender_id</c> foreign key resolves.
+    /// Ensures a row exists in the local PostgreSQL <c>tenders</c> table for the given id and
+    /// returns the id the <c>bids.tender_id</c> foreign key must point at. The canonical tender
+    /// lives in MongoDB via BiddingBuddyServices; we mirror a minimal stub here so the FK resolves.
     /// </summary>
-    private async Task EnsureLocalTenderAsync(Guid tenderId, CancellationToken ct)
+    /// <remarks>
+    /// The id the UI sends (the Mongo <c>_id</c>) is a different id-space than the Postgres
+    /// primary key the pipeline assigns when it mirrors a tender (<see cref="InternalPipelineService"/>
+    /// inserts with <c>gen_random_uuid()</c>). So a row for this tender may already exist under a
+    /// <em>different</em> PK but the same <c>gem_tender_id</c>/<c>mongo_tender_id</c>. Inserting a
+    /// second stub in that case violates the <c>tenders_gem_tender_id_key</c> unique constraint, so
+    /// we resolve the existing row by its natural keys and reuse its id instead of duplicating it.
+    /// </remarks>
+    private async Task<Guid> EnsureLocalTenderAsync(Guid tenderId, CancellationToken ct)
     {
-        var exists = await db.Tenders.AnyAsync(t => t.Id == tenderId, ct);
-        if (exists) return;
+        // Already mirrored under this exact id — the FK resolves as-is.
+        if (await db.Tenders.AnyAsync(t => t.Id == tenderId, ct))
+            return tenderId;
 
         TenderDetailDto remote;
         try
@@ -303,11 +617,23 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
                 $"Tender {tenderId} not found in BiddingBuddyServices: {ex.Message}", ex);
         }
 
+        var mongoId = tenderId.ToString();
+        var gemId   = string.IsNullOrWhiteSpace(remote.GemTenderId) ? mongoId : remote.GemTenderId;
+
+        // The pipeline may already have mirrored this tender under a Postgres-generated id but
+        // the same gem_tender_id / mongo_tender_id. Reuse that row rather than insert a duplicate
+        // (which would violate tenders_gem_tender_id_key — the bug this guards against).
+        var existing = await db.Tenders
+            .FirstOrDefaultAsync(t => t.GemTenderId == gemId || t.MongoTenderId == mongoId, ct);
+        if (existing is not null)
+            return existing.Id;
+
         var now = DateTime.UtcNow;
         var stub = new Tender
         {
             Id               = tenderId,
-            GemTenderId      = string.IsNullOrWhiteSpace(remote.GemTenderId) ? tenderId.ToString() : remote.GemTenderId,
+            GemTenderId      = gemId,
+            MongoTenderId    = mongoId,
             Title            = string.IsNullOrWhiteSpace(remote.Title) ? "(untitled)" : remote.Title,
             Description      = remote.Description,
             BuyerOrgName     = remote.BuyerOrgName,
@@ -344,7 +670,23 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
 
         // Commit the tender stub immediately so the bid insert in the caller's
         // SaveChangesAsync sees it for the FK check.
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost a race with the pipeline upsert (it inserted the same gem_tender_id
+            // between our existence check and this save). Drop our stub and reuse the row
+            // that won the race so the bid still gets a valid FK.
+            entry.State = EntityState.Detached;
+            var raced = await db.Tenders
+                .FirstOrDefaultAsync(t => t.GemTenderId == gemId || t.MongoTenderId == mongoId, ct);
+            if (raced is null) throw;
+            return raced.Id;
+        }
+
+        return tenderId;
     }
 
     /// <summary>
@@ -395,8 +737,8 @@ public class BidService(BffDbContext db, IBiddingBuddyServicesClient servicesCli
 
         return new BidDetailDto(
             bid.Id, bid.OrgId, bid.TenderId,
-            bid.Tender?.GemTenderId, bid.Title, bid.Description,
-            bid.Stage, bid.Priority,
+            bid.Tender?.GemTenderId, bid.Tender?.MongoTenderId, bid.Title, bid.Description,
+            bid.Stage, bid.StatusCategory, bid.Priority,
             bid.AssignedTo, bid.AssignedUser?.Name,
             bid.DueDate, bid.TenderValue, bid.OurBidValue,
             bid.WinProbability, bid.ProgressPct,

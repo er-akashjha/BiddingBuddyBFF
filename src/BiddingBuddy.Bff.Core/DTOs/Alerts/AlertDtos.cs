@@ -43,6 +43,7 @@ public record UpdateTenderAlertRuleDto(
 public record OrgAlertSettingsDto(
     bool IsEnabled,
     int DigestSize,
+    int MinSendIntervalMinutes,
     string[] NotifyChannels,
     string[] NotifyRoles
 );
@@ -50,6 +51,7 @@ public record OrgAlertSettingsDto(
 public record UpdateOrgAlertSettingsDto(
     bool? IsEnabled,
     int? DigestSize,
+    int? MinSendIntervalMinutes,
     string[]? NotifyChannels,
     string[]? NotifyRoles
 );
