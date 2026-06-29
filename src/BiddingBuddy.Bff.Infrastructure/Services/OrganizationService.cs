@@ -246,12 +246,65 @@ public class OrganizationService(
             .FirstOrDefaultAsync(m => m.Id == memberId && m.OrgId == orgId, ct)
             ?? throw new KeyNotFoundException("Member not found.");
 
+        var previousRole = member.Role;
+
         if (dto.Role       is not null) member.Role       = dto.Role;
         if (dto.Department is not null) member.Department = dto.Department;
         if (dto.Status     is not null) member.Status     = dto.Status;
 
         await db.SaveChangesAsync(ct);
+
+        // Tell the affected member their role changed (not when an admin changes their own).
+        if (dto.Role is not null && dto.Role != previousRole && member.UserId != requestingUserId)
+            await NotifyMemberRoleChangedAsync(member, requestingUserId, orgId, ct);
+
         return MapMember(member);
+    }
+
+    /// <summary>
+    /// Notify a member that their org role changed (MEMBER_ROLE_CHANGED, InApp + Email).
+    /// Never throws — the role update is already persisted.
+    /// </summary>
+    private async Task NotifyMemberRoleChangedAsync(OrgMember member, Guid changedById, Guid orgId, CancellationToken ct)
+    {
+        try
+        {
+            var orgName = await db.Organizations
+                .Where(o => o.Id == orgId).Select(o => o.Name).FirstOrDefaultAsync(ct) ?? string.Empty;
+            var changerName = await db.Users
+                .Where(u => u.Id == changedById).Select(u => u.Name).FirstOrDefaultAsync(ct) ?? "An admin";
+
+            var firstName = FirstName(member.User?.Name);
+            if (string.IsNullOrEmpty(firstName)) firstName = "there";
+
+            var recipients = new List<NotificationRecipientDto>
+            {
+                new(NotificationChannel.InApp, member.UserId.ToString()),
+            };
+            if (!string.IsNullOrWhiteSpace(member.User?.Email))
+                recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, member.User!.Email));
+
+            var frontendBase = (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+
+            await notifications.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "MEMBER_ROLE_CHANGED",
+                UserId:       member.UserId,
+                Payload: new Dictionary<string, object>
+                {
+                    ["FirstName"]     = firstName,
+                    ["OrgName"]       = orgName,
+                    ["NewRole"]       = member.Role,
+                    ["ChangedByName"] = changerName,
+                    ["OrgId"]         = orgId.ToString(),
+                    ["Link"]          = $"{frontendBase}/team",
+                },
+                Recipients: recipients), ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "MEMBER_ROLE_CHANGED notification failed for member {MemberId}", member.Id);
+        }
     }
 
     public async Task RemoveMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, CancellationToken ct = default)

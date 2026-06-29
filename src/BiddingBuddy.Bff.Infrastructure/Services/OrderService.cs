@@ -1,14 +1,26 @@
 using BiddingBuddy.Bff.Core.DTOs.Common;
+using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orders;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
-public class OrderService(BffDbContext db) : IOrderService
+public class OrderService(
+    BffDbContext db,
+    INotificationPublisher notifications,
+    INotificationAudienceResolver audience,
+    IConfiguration config,
+    ILogger<OrderService> logger) : IOrderService
 {
+    private static readonly string[] OrderRoles = ["owner", "admin", "sales"];
+
+    private string FrontendBaseUrl => (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+
     public async Task<PagedResult<OrderListItemDto>> ListAsync(
         Guid orgId, string? status, int page, int pageSize, CancellationToken ct = default)
     {
@@ -64,8 +76,59 @@ public class OrderService(BffDbContext db) : IOrderService
         };
         db.Orders.Add(order);
         await db.SaveChangesAsync(ct);
+
+        await NotifyOrderReceivedAsync(order, ct);
+
         return await GetAsync(order.Id, orgId, ct);
     }
+
+    /// <summary>
+    /// Notify the sales team + admins that a new order landed (ORDER_RECEIVED, InApp + Email).
+    /// Never throws — a notification hiccup must not fail order creation.
+    /// </summary>
+    private async Task NotifyOrderReceivedAsync(Order order, CancellationToken ct)
+    {
+        try
+        {
+            var recipients = await audience.ByRolesAsync(order.OrgId, OrderRoles, null, ct);
+            if (recipients.Count == 0) return;
+
+            var orderRef = order.OrderNumber ?? order.GemOrderId ?? string.Empty;
+
+            foreach (var m in recipients)
+            {
+                var channels = new List<NotificationRecipientDto>
+                {
+                    new(NotificationChannel.InApp, m.UserId.ToString()),
+                };
+                if (!string.IsNullOrWhiteSpace(m.Email))
+                    channels.Add(new NotificationRecipientDto(NotificationChannel.Email, m.Email!));
+
+                await notifications.SendAsync(new SendNotificationDto(
+                    Category:     NotificationCategory.Information,
+                    TemplateCode: "ORDER_RECEIVED",
+                    UserId:       m.UserId,
+                    Payload: new Dictionary<string, object>
+                    {
+                        ["FirstName"] = FirstNameOf(m.Name),
+                        ["OrderRef"]  = orderRef,
+                        ["BuyerOrg"]  = order.BuyerOrg ?? string.Empty,
+                        ["Amount"]    = order.TotalValue?.ToString("N0") ?? string.Empty,
+                        ["OrgId"]     = order.OrgId.ToString(),
+                        ["EntityId"]  = order.Id.ToString(),
+                        ["Link"]      = $"{FrontendBaseUrl}/orders/{order.Id}",
+                    },
+                    Recipients: channels), ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "ORDER_RECEIVED notification failed for order {OrderId}", order.Id);
+        }
+    }
+
+    private static string FirstNameOf(string? fullName)
+        => string.IsNullOrWhiteSpace(fullName) ? "there" : fullName.Trim().Split(' ')[0];
 
     public async Task<OrderDetailDto> UpdateAsync(Guid orderId, Guid orgId, UpdateOrderDto dto, CancellationToken ct = default)
     {

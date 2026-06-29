@@ -7,6 +7,7 @@ using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
@@ -15,8 +16,15 @@ public class BidService(
     BffDbContext db,
     IBiddingBuddyServicesClient servicesClient,
     INotificationPublisher notificationPublisher,
+    INotificationAudienceResolver audience,
+    IConfiguration config,
     ILogger<BidService> logger) : IBidService
 {
+    // Roles told about won/lost outcomes (alongside the bid's own assignee).
+    private static readonly string[] BidNotifyRoles = ["owner", "admin", "bid_manager"];
+
+    private string FrontendBaseUrl => (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+
     public async Task<PagedResult<BidListItemDto>> ListAsync(
         Guid orgId, Guid currentUserId, BidListQuery q, CancellationToken ct = default)
     {
@@ -233,9 +241,10 @@ public class BidService(
         return await GetAsync(bid.Id, orgId, ct);
     }
 
-    public async Task<BidDetailDto> UpdateAsync(Guid bidId, Guid orgId, UpdateBidDto dto, CancellationToken ct = default)
+    public async Task<BidDetailDto> UpdateAsync(Guid bidId, Guid orgId, Guid actorId, UpdateBidDto dto, CancellationToken ct = default)
     {
         var bid = await LoadBidAsync(bidId, orgId, ct);
+        var previousAssignee = bid.AssignedTo;
 
         if (dto.Stage is not null && !BidStages.IsValid(dto.Stage))
             throw new ArgumentException($"Invalid stage '{dto.Stage}'. Allowed: {string.Join(", ", BidStages.All)}.", nameof(dto));
@@ -254,6 +263,13 @@ public class BidService(
         if (dto.WonValue.HasValue)          bid.WonValue       = dto.WonValue;
 
         await db.SaveChangesAsync(ct);
+
+        // Reassignment is the canonical "bid assigned" trigger (PATCH /api/bids backs both the
+        // bid editor and the tender-detail "reassign owner" action). Stage-driven notifications
+        // live on ChangeStageAsync — the dedicated stage endpoint — to avoid double-firing.
+        if (bid.AssignedTo != previousAssignee)
+            await NotifyBidAssignedAsync(bid, actorId, ct);
+
         return await GetAsync(bidId, orgId, ct);
     }
 
@@ -277,6 +293,9 @@ public class BidService(
         });
 
         await db.SaveChangesAsync(ct);
+
+        await NotifyStageChangedAsync(bid, fromStage, dto.Stage, actorId, ct);
+
         return await GetAsync(bidId, orgId, ct);
     }
 
@@ -375,6 +394,9 @@ public class BidService(
         await db.SaveChangesAsync(ct);
 
         var authorName = await GetUserNameAsync(authorId, ct) ?? string.Empty;
+
+        await NotifyBidCommentAsync(bidId, orgId, authorId, authorName, comment.Body, ct);
+
         return new BidCommentDto(
             comment.Id, comment.BidId, comment.AuthorId, authorName,
             comment.Body, comment.Kind, comment.ChecklistItemId, null, [],
@@ -572,6 +594,199 @@ public class BidService(
         if (pref.EventTypes.Length > 0 && !pref.EventTypes.Contains("task_assigned")) return false;
         return true;
     }
+
+    // ── Bid notifications (assignment + stage change / won / lost) ───────────────
+
+    /// <summary>
+    /// Fire a BID_ASSIGNED notification to the new assignee (InApp always; Email unless they
+    /// opted out). No-op when the bid is unassigned or assigned to the actor themselves. Never
+    /// throws — a notification hiccup must not fail the bid update.
+    /// </summary>
+    private async Task NotifyBidAssignedAsync(Bid bid, Guid assignerId, CancellationToken ct)
+    {
+        if (bid.AssignedTo is not Guid assigneeId || assigneeId == assignerId)
+            return;
+
+        try
+        {
+            var assignee = await audience.ByUserAsync(assigneeId, ct);
+            if (assignee is null) return;
+
+            var assignerName = await GetUserNameAsync(assignerId, ct) ?? "A teammate";
+            var dueText = bid.DueDate is DateOnly due ? $"on {due:dd MMM yyyy}" : string.Empty;
+
+            var recipients = new List<NotificationRecipientDto>
+            {
+                new(NotificationChannel.InApp, assigneeId.ToString()),
+            };
+            if (!string.IsNullOrWhiteSpace(assignee.Email)
+                && await ShouldEmailAsync(assigneeId, bid.OrgId, "bid_assigned", ct))
+                recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, assignee.Email!));
+
+            await notificationPublisher.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Transactional,
+                TemplateCode: "BID_ASSIGNED",
+                UserId:       assigneeId,
+                Payload: new Dictionary<string, object>
+                {
+                    ["FirstName"]      = FirstNameOf(assignee.Name),
+                    ["BidTitle"]       = bid.Title,
+                    ["AssignedByName"] = assignerName,
+                    ["DueText"]        = dueText,
+                    ["OrgId"]          = bid.OrgId.ToString(),
+                    ["EntityId"]       = bid.Id.ToString(),
+                    ["Link"]           = $"{FrontendBaseUrl}/bids/{bid.Id}",
+                },
+                Recipients: recipients), ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "BID_ASSIGNED notification failed for bid {BidId}", bid.Id);
+        }
+    }
+
+    /// <summary>
+    /// On a stage transition, notify the assignee (BID_STAGE_CHANGED, in-app). Won/lost are
+    /// outcomes the whole bid team cares about, so they also fan out to owner/admin/bid_manager
+    /// over Email + InApp. The acting user is never notified about their own change. Never throws.
+    /// </summary>
+    private async Task NotifyStageChangedAsync(Bid bid, string fromStage, string toStage, Guid actorId, CancellationToken ct)
+    {
+        if (string.Equals(fromStage, toStage, StringComparison.Ordinal))
+            return;
+
+        var (template, category) = toStage switch
+        {
+            "won"  => ("BID_WON",  NotificationCategory.Information),
+            "lost" => ("BID_LOST", NotificationCategory.Information),
+            _      => ("BID_STAGE_CHANGED", NotificationCategory.Information),
+        };
+        var isOutcome = template is "BID_WON" or "BID_LOST";
+
+        try
+        {
+            // De-dup recipients by user id (assignee may also hold a notified role).
+            var targets = new Dictionary<Guid, NotificationAudienceMember>();
+            if (bid.AssignedTo is Guid a && a != actorId)
+            {
+                var m = await audience.ByUserAsync(a, ct);
+                if (m is not null) targets[m.UserId] = m;
+            }
+            if (isOutcome)
+                foreach (var m in await audience.ByRolesAsync(bid.OrgId, BidNotifyRoles, actorId, ct))
+                    targets[m.UserId] = m;
+
+            if (targets.Count == 0) return;
+
+            foreach (var m in targets.Values)
+            {
+                var recipients = new List<NotificationRecipientDto>
+                {
+                    new(NotificationChannel.InApp, m.UserId.ToString()),
+                };
+                if (isOutcome && !string.IsNullOrWhiteSpace(m.Email))
+                    recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, m.Email!));
+
+                try
+                {
+                    await notificationPublisher.SendAsync(new SendNotificationDto(
+                        Category:     category,
+                        TemplateCode: template,
+                        UserId:       m.UserId,
+                        Payload: new Dictionary<string, object>
+                        {
+                            ["FirstName"]  = FirstNameOf(m.Name),
+                            ["BidTitle"]   = bid.Title,
+                            ["FromStage"]  = fromStage,
+                            ["ToStage"]    = toStage,
+                            ["WonValue"]   = bid.WonValue?.ToString("N0") ?? string.Empty,
+                            ["LossReason"] = bid.LossReason ?? string.Empty,
+                            ["OrgId"]      = bid.OrgId.ToString(),
+                            ["EntityId"]   = bid.Id.ToString(),
+                            ["Link"]       = $"{FrontendBaseUrl}/bids/{bid.Id}",
+                        },
+                        Recipients: recipients), ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "{Template} notification failed for bid {BidId}, user {UserId}", template, bid.Id, m.UserId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Stage-change notification failed for bid {BidId}", bid.Id);
+        }
+    }
+
+    /// <summary>
+    /// Notify the bid's assignee when someone else comments (BID_COMMENT, InApp + opt-out email).
+    /// No-op when the bid is unassigned or the commenter is the assignee. Never throws.
+    /// </summary>
+    private async Task NotifyBidCommentAsync(Guid bidId, Guid orgId, Guid authorId, string authorName, string body, CancellationToken ct)
+    {
+        try
+        {
+            var bid = await db.Bids.AsNoTracking()
+                .Where(b => b.Id == bidId)
+                .Select(b => new { b.Title, b.AssignedTo })
+                .FirstOrDefaultAsync(ct);
+            if (bid?.AssignedTo is not Guid assigneeId || assigneeId == authorId)
+                return;
+
+            var assignee = await audience.ByUserAsync(assigneeId, ct);
+            if (assignee is null) return;
+
+            var snippet = body.Length > 140 ? body[..140] + "…" : body;
+
+            var recipients = new List<NotificationRecipientDto>
+            {
+                new(NotificationChannel.InApp, assigneeId.ToString()),
+            };
+            if (!string.IsNullOrWhiteSpace(assignee.Email)
+                && await ShouldEmailAsync(assigneeId, orgId, "bid_comment", ct))
+                recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, assignee.Email!));
+
+            await notificationPublisher.SendAsync(new SendNotificationDto(
+                Category:     NotificationCategory.Information,
+                TemplateCode: "BID_COMMENT",
+                UserId:       assigneeId,
+                Payload: new Dictionary<string, object>
+                {
+                    ["FirstName"]  = FirstNameOf(assignee.Name),
+                    ["BidTitle"]   = bid.Title,
+                    ["AuthorName"] = authorName,
+                    ["Snippet"]    = snippet,
+                    ["OrgId"]      = orgId.ToString(),
+                    ["EntityId"]   = bidId.ToString(),
+                    ["Link"]       = $"{FrontendBaseUrl}/bids/{bidId}",
+                },
+                Recipients: recipients), ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "BID_COMMENT notification failed for bid {BidId}", bidId);
+        }
+    }
+
+    /// <summary>
+    /// Email opt-out check (default on). A user disables it by setting their email channel
+    /// preference to disabled, or by curating an explicit event list that excludes
+    /// <paramref name="eventType"/>.
+    /// </summary>
+    private async Task<bool> ShouldEmailAsync(Guid userId, Guid orgId, string eventType, CancellationToken ct)
+    {
+        var pref = await db.NotificationPreferences
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.OrgId == orgId && p.Channel == "email", ct);
+        if (pref is null) return true;
+        if (!pref.IsEnabled) return false;
+        if (pref.EventTypes.Length > 0 && !pref.EventTypes.Contains(eventType)) return false;
+        return true;
+    }
+
+    private static string FirstNameOf(string? fullName)
+        => string.IsNullOrWhiteSpace(fullName) ? "there" : fullName.Trim().Split(' ')[0];
 
     public async Task DeleteChecklistItemAsync(Guid itemId, Guid bidId, Guid orgId, CancellationToken ct = default)
     {

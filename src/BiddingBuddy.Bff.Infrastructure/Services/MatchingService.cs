@@ -321,6 +321,7 @@ public class MatchingService(
 
             var payload = new Dictionary<string, object>
             {
+                ["OrgId"]       = orgId.ToString(),    // lets the InApp sender write the inbox row
                 ["FirstName"]   = FirstNameOf(r.Name),
                 ["Count"]       = ordered.Count,
                 ["One"]         = ordered.Count == 1,
