@@ -31,7 +31,8 @@ public record TenderSourceDto(
     string? Platform,
     string? PlatformTenderId,
     string? ExternalBidNumber,
-    DateTime? ImportedAt
+    DateTime? ImportedAt,
+    string? SourceUrl = null
 );
 
 public record TenderCategoryDto(

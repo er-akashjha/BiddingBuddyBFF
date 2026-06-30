@@ -65,7 +65,10 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                         HasStoredKey: !string.IsNullOrWhiteSpace(d.S3Key),
                         Url:          string.IsNullOrWhiteSpace(d.Url) ? null : d.Url))
                     .ToList(),
-                Timeline:         tender.Timeline);
+                Timeline:         tender.Timeline,
+                // Previously dropped — now surfaced to the UI.
+                SourceUrl:        tender.Source?.SourceUrl,
+                TechnicalSpecifications: tender.TechnicalSpecifications);
         }
 
 
