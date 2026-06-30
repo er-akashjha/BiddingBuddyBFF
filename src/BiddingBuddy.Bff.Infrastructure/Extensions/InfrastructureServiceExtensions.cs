@@ -102,6 +102,15 @@ public static class InfrastructureServiceExtensions
         services.Configure<MatchingScanOptions>(config.GetSection(MatchingScanOptions.Section));
         services.AddScoped<IInternalPipelineService, InternalPipelineService>();
 
+        // Deadline / expiry reminder scan (bids, invoices, compliance, delivery, EMD)
+        services.AddScoped<INotificationAudienceResolver, NotificationAudienceResolver>();
+        services.AddScoped<IDeadlineScanService, DeadlineScanService>();
+        services.Configure<DeadlineScanOptions>(config.GetSection(DeadlineScanOptions.Section));
+
+        // Weekly org-summary digest
+        services.AddScoped<IWeeklyDigestService, WeeklyDigestService>();
+        services.Configure<WeeklyDigestOptions>(config.GetSection(WeeklyDigestOptions.Section));
+
         // Schema migrator (runs embedded SQL scripts via /internal/migrations)
         services.AddScoped<IDbMigrator, DbMigrator>();
 

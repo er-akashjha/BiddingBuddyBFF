@@ -39,6 +39,18 @@ public class PublicTendersController(IBiddingBuddyServicesClient servicesClient)
         return Ok(result.ToPublic());
     }
 
+    /// <summary>
+    /// Tender counts grouped by state — powers the landing-page coverage
+    /// choropleth. Returns one entry per state that has at least one tender.
+    /// </summary>
+    [HttpGet("state-counts")]
+    [ProducesResponseType(typeof(List<StateTenderCountDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> StateCounts(CancellationToken ct)
+    {
+        var counts = await servicesClient.GetStateTenderCountsAsync(ct);
+        return Ok(counts);
+    }
+
     /// <summary>Full public tender detail by ID (intrinsic fields only). 404 if not found.</summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(PublicTenderDetailDto), StatusCodes.Status200OK)]

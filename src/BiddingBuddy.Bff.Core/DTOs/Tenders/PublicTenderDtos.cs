@@ -31,6 +31,15 @@ public record PublicTenderListItemDto(
     string Status
 );
 
+/// <summary>
+/// Tender count for one state — for the public landing-page coverage map.
+/// Mirrors BiddingBuddyServices' StateTenderCount.
+/// </summary>
+public record StateTenderCountDto(
+    string State,
+    long Count
+);
+
 public record PublicPagedTenderListDto(
     IReadOnlyList<PublicTenderListItemDto> Items,
     int  TotalCount,

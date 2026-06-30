@@ -144,7 +144,12 @@ public record BidCommentDto(
     DateTime UpdatedAt
 );
 
-public record AddCommentDto(string Body);
+/// <summary>
+/// Add an internal note. <see cref="MentionedUserIds"/> are the org users @-tagged in the
+/// note body (resolved client-side from the mention picker); each is notified that they were
+/// mentioned. Optional / may be empty.
+/// </summary>
+public record AddCommentDto(string Body, IReadOnlyList<Guid>? MentionedUserIds = null);
 
 // ── Attachments (BID-303) ────────────────────────────────────────────────────
 

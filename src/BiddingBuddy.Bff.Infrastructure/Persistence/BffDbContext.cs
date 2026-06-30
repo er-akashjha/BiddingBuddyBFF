@@ -66,6 +66,9 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
     public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
 
+    // Idempotency ledger for the scheduled deadline/expiry reminder scan
+    public DbSet<NotificationReminder> NotificationReminders => Set<NotificationReminder>();
+
     // Notification dispatch subsystem (event → per-channel deliveries → audit log)
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();

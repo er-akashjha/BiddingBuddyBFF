@@ -166,7 +166,8 @@ public class SsrController(IBiddingBuddyServicesClient servicesClient, IConfigur
                 ["serviceType"] = string.IsNullOrWhiteSpace(t.Category) ? null : t.Category,
                 ["serviceArea"] = string.IsNullOrWhiteSpace(t.State) ? null
                     : new Dictionary<string, object?> { ["@type"] = "AdministrativeArea", ["name"] = t.State },
-                ["provider"] = (t.BuyerOrgName ?? t.Department ?? t.Ministry) is { } prov
+                ["provider"] = new[] { t.BuyerOrgName, t.Department, t.Ministry }
+                        .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) is { } prov
                     ? new Dictionary<string, object?> { ["@type"] = "GovernmentOrganization", ["name"] = prov }
                     : null,
                 ["datePosted"] = t.PublishedDate?.ToString("yyyy-MM-dd"),
