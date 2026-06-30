@@ -40,8 +40,8 @@ public class PublicTendersController(IBiddingBuddyServicesClient servicesClient)
     }
 
     /// <summary>
-    /// Open/live tender counts grouped by state — powers the landing-page coverage
-    /// choropleth. Returns one entry per state that has at least one open tender.
+    /// Tender counts grouped by state — powers the landing-page coverage
+    /// choropleth. Returns one entry per state that has at least one tender.
     /// </summary>
     [HttpGet("state-counts")]
     [ProducesResponseType(typeof(List<StateTenderCountDto>), StatusCodes.Status200OK)]

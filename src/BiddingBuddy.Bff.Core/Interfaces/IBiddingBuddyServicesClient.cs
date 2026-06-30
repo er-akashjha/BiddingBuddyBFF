@@ -31,7 +31,7 @@ public interface IBiddingBuddyServicesClient
         string field, string? search, int limit, CancellationToken ct = default);
 
     /// <summary>
-    /// Open/live tender counts grouped by state, for the public coverage map.
+    /// Tender counts grouped by state, for the public coverage map.
     /// </summary>
     Task<List<StateTenderCountDto>> GetStateTenderCountsAsync(CancellationToken ct = default);
 }

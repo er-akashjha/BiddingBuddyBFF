@@ -32,7 +32,7 @@ public record PublicTenderListItemDto(
 );
 
 /// <summary>
-/// Open/live tender count for one state — for the public landing-page coverage map.
+/// Tender count for one state — for the public landing-page coverage map.
 /// Mirrors BiddingBuddyServices' StateTenderCount.
 /// </summary>
 public record StateTenderCountDto(
