@@ -173,6 +173,9 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         return GetJsonAsync<List<string>>($"api/tenders/facet-options?{qs}", ct);
     }
 
+    public Task<List<StateTenderCountDto>> GetStateTenderCountsAsync(CancellationToken ct = default)
+        => GetJsonAsync<List<StateTenderCountDto>>("api/tenders/state-counts", ct);
+
     /// <summary>
     /// Shared authenticated GET + deserialize with one-shot 401 token refresh.
     /// Mirrors the inline pattern used by the older methods in this class.

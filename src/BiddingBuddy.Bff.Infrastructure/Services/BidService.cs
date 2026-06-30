@@ -148,19 +148,40 @@ public class BidService(
         // Distinct + capped: this backs a single tender-list page (≤100 rows), so bound the
         // IN (...) list defensively rather than trusting the caller.
         var ids = tenderIds.Distinct().Take(100).ToList();
+        var idStrings = ids.Select(i => i.ToString()).ToList();
 
+        // The UI asks by the tender's MongoDB _id (the tender list/detail proxy Mongo), but
+        // bids.tender_id points at the LOCAL Postgres tender PK, which the pipeline generates
+        // independently of the Mongo id (see EnsureLocalTenderAsync). So a bid for a
+        // pipeline-mirrored tender has tender_id = the random Postgres PK, NOT the Mongo id the
+        // caller passed — matching only on tender_id would silently miss it and the
+        // "already in pipeline" badge would never light up (its create path, however, stamps
+        // the tender row's mongo_tender_id). Match EITHER the local PK directly OR the linked
+        // tender row's mongo_tender_id, then key each result back to the id the caller queried
+        // with so the frontend's lookup map (keyed by Mongo id) resolves.
         var bids = await db.Bids
-            .Where(b => b.OrgId == orgId && b.TenderId != null && ids.Contains(b.TenderId.Value))
+            .Where(b => b.OrgId == orgId && b.TenderId != null)
+            .Where(b => ids.Contains(b.TenderId!.Value)
+                     || (b.Tender != null && b.Tender.MongoTenderId != null
+                         && idStrings.Contains(b.Tender.MongoTenderId)))
             .Include(b => b.AssignedUser)
+            .Include(b => b.Tender)
             .OrderByDescending(b => b.UpdatedAt)
             .ToListAsync(ct);
 
-        // One entry per tender — the most recently updated bid wins when a tender has several.
-        return bids
-            .GroupBy(b => b.TenderId!.Value)
-            .Select(g => g.First()) // list is already newest-first
-            .Select(b => new BidByTenderDto(b.TenderId!.Value, b.Id, b.AssignedTo, b.AssignedUser?.Name, b.Stage))
-            .ToList();
+        // One entry per requested tender — the most recently updated bid wins when several exist.
+        var result = new List<BidByTenderDto>(bids.Count);
+        var seen = new HashSet<Guid>();
+        foreach (var b in bids) // already newest-first
+        {
+            // Prefer the direct PK match; otherwise resolve back to the Mongo id the caller asked for.
+            var key = ids.Contains(b.TenderId!.Value)
+                ? b.TenderId!.Value
+                : (Guid.TryParse(b.Tender?.MongoTenderId, out var mongoKey) ? mongoKey : b.TenderId!.Value);
+            if (!seen.Add(key)) continue;
+            result.Add(new BidByTenderDto(key, b.Id, b.AssignedTo, b.AssignedUser?.Name, b.Stage));
+        }
+        return result;
     }
 
     /// <summary>
@@ -212,6 +233,20 @@ public class BidService(
             localTenderId = await EnsureLocalTenderAsync(dto.TenderId.Value, ct);
         }
 
+        // "Add to bid pipeline" is one-bid-per-tender by design. If a bid already exists for this
+        // tender in the org, return it instead of creating a duplicate — this makes the action
+        // idempotent and stops the tender list + detail pages (which both expose the button) from
+        // racing in a third duplicate before the "already in pipeline" badge has loaded.
+        if (localTenderId.HasValue)
+        {
+            var existingBid = await db.Bids
+                .Where(b => b.OrgId == orgId && b.TenderId == localTenderId.Value)
+                .OrderByDescending(b => b.UpdatedAt)
+                .FirstOrDefaultAsync(ct);
+            if (existingBid is not null)
+                return await GetAsync(existingBid.Id, orgId, ct);
+        }
+
         var bid = new Bid
         {
             Id            = Guid.NewGuid(),
@@ -238,6 +273,13 @@ public class BidService(
         });
 
         await db.SaveChangesAsync(ct);
+
+        // Assigning at create time ("Add to pipeline → assign to teammate") is just as much a
+        // "bid assigned" event as a later reassignment, so fire the same notification. UpdateAsync
+        // covers the reassign path; without this, the most common assignment flow sent nothing.
+        if (bid.AssignedTo.HasValue)
+            await NotifyBidAssignedAsync(bid, userId, ct);
+
         return await GetAsync(bid.Id, orgId, ct);
     }
 
@@ -395,7 +437,11 @@ public class BidService(
 
         var authorName = await GetUserNameAsync(authorId, ct) ?? string.Empty;
 
-        await NotifyBidCommentAsync(bidId, orgId, authorId, authorName, comment.Body, ct);
+        var mentioned = (dto.MentionedUserIds ?? [])
+            .Where(uid => uid != authorId)
+            .Distinct()
+            .ToList();
+        await NotifyBidCommentAsync(bidId, orgId, authorId, authorName, comment.Body, mentioned, ct);
 
         return new BidCommentDto(
             comment.Id, comment.BidId, comment.AuthorId, authorName,
@@ -720,10 +766,13 @@ public class BidService(
     }
 
     /// <summary>
-    /// Notify the bid's assignee when someone else comments (BID_COMMENT, InApp + opt-out email).
-    /// No-op when the bid is unassigned or the commenter is the assignee. Never throws.
+    /// Notify on a new comment (BID_COMMENT, InApp + opt-out email). Recipients are the bid's
+    /// assignee plus everyone @-mentioned in the note, de-duplicated and excluding the author.
+    /// No-op when there's no one left to notify. Never throws.
     /// </summary>
-    private async Task NotifyBidCommentAsync(Guid bidId, Guid orgId, Guid authorId, string authorName, string body, CancellationToken ct)
+    private async Task NotifyBidCommentAsync(
+        Guid bidId, Guid orgId, Guid authorId, string authorName, string body,
+        IReadOnlyCollection<Guid> mentionedUserIds, CancellationToken ct)
     {
         try
         {
@@ -731,37 +780,54 @@ public class BidService(
                 .Where(b => b.Id == bidId)
                 .Select(b => new { b.Title, b.AssignedTo })
                 .FirstOrDefaultAsync(ct);
-            if (bid?.AssignedTo is not Guid assigneeId || assigneeId == authorId)
-                return;
+            if (bid is null) return;
 
-            var assignee = await audience.ByUserAsync(assigneeId, ct);
-            if (assignee is null) return;
+            // Assignee (unless they wrote the note) + everyone @-mentioned, minus the author.
+            var targetIds = new HashSet<Guid>();
+            if (bid.AssignedTo is Guid assigneeId && assigneeId != authorId)
+                targetIds.Add(assigneeId);
+            foreach (var uid in mentionedUserIds)
+                if (uid != authorId) targetIds.Add(uid);
+            if (targetIds.Count == 0) return;
 
             var snippet = body.Length > 140 ? body[..140] + "…" : body;
 
-            var recipients = new List<NotificationRecipientDto>
+            foreach (var userId in targetIds)
             {
-                new(NotificationChannel.InApp, assigneeId.ToString()),
-            };
-            if (!string.IsNullOrWhiteSpace(assignee.Email)
-                && await ShouldEmailAsync(assigneeId, orgId, "bid_comment", ct))
-                recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, assignee.Email!));
+                var member = await audience.ByUserAsync(userId, ct);
+                if (member is null) continue;
 
-            await notificationPublisher.SendAsync(new SendNotificationDto(
-                Category:     NotificationCategory.Information,
-                TemplateCode: "BID_COMMENT",
-                UserId:       assigneeId,
-                Payload: new Dictionary<string, object>
+                var recipients = new List<NotificationRecipientDto>
                 {
-                    ["FirstName"]  = FirstNameOf(assignee.Name),
-                    ["BidTitle"]   = bid.Title,
-                    ["AuthorName"] = authorName,
-                    ["Snippet"]    = snippet,
-                    ["OrgId"]      = orgId.ToString(),
-                    ["EntityId"]   = bidId.ToString(),
-                    ["Link"]       = $"{FrontendBaseUrl}/bids/{bidId}",
-                },
-                Recipients: recipients), ct);
+                    new(NotificationChannel.InApp, userId.ToString()),
+                };
+                if (!string.IsNullOrWhiteSpace(member.Email)
+                    && await ShouldEmailAsync(userId, orgId, "bid_comment", ct))
+                    recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, member.Email!));
+
+                try
+                {
+                    await notificationPublisher.SendAsync(new SendNotificationDto(
+                        Category:     NotificationCategory.Information,
+                        TemplateCode: "BID_COMMENT",
+                        UserId:       userId,
+                        Payload: new Dictionary<string, object>
+                        {
+                            ["FirstName"]  = FirstNameOf(member.Name),
+                            ["BidTitle"]   = bid.Title,
+                            ["AuthorName"] = authorName,
+                            ["Snippet"]    = snippet,
+                            ["OrgId"]      = orgId.ToString(),
+                            ["EntityId"]   = bidId.ToString(),
+                            ["Link"]       = $"{FrontendBaseUrl}/bids/{bidId}",
+                        },
+                        Recipients: recipients), ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "BID_COMMENT notification failed for bid {BidId}, user {UserId}", bidId, userId);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -841,7 +907,19 @@ public class BidService(
         var existing = await db.Tenders
             .FirstOrDefaultAsync(t => t.GemTenderId == gemId || t.MongoTenderId == mongoId, ct);
         if (existing is not null)
+        {
+            // Reusing a pipeline-mirrored row (its PK ≠ the Mongo id the UI sent). Stamp its
+            // mongo_tender_id from the id we just resolved if the pipeline hasn't backfilled it,
+            // so GetByTenderIdsAsync can later match this tender by the Mongo id the UI queries
+            // with — i.e. the "already in pipeline" badge lights up without depending on the
+            // global migration-0010 backfill having run.
+            if (string.IsNullOrWhiteSpace(existing.MongoTenderId))
+            {
+                existing.MongoTenderId = mongoId;
+                await db.SaveChangesAsync(ct);
+            }
             return existing.Id;
+        }
 
         var now = DateTime.UtcNow;
         var stub = new Tender
