@@ -1,9 +1,11 @@
 using BiddingBuddy.Bff.Core.DTOs.Internal;
+using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
@@ -14,8 +16,15 @@ namespace BiddingBuddy.Bff.Infrastructure.Services;
 public class InternalPipelineService(
     BffDbContext db,
     IBiddingBuddyServicesClient servicesClient,
+    INotificationPublisher notifications,
+    INotificationAudienceResolver audience,
+    IConfiguration config,
     ILogger<InternalPipelineService> logger) : IInternalPipelineService
 {
+    private static readonly string[] BidRoles = ["owner", "admin", "bid_manager"];
+
+    private string FrontendBaseUrl => (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+
     public async Task<UpsertTenderResponseDto> UpsertTenderAsync(UpsertTenderDto dto, CancellationToken ct = default)
     {
         var existing = await db.Tenders
@@ -55,6 +64,10 @@ public class InternalPipelineService(
             return new UpsertTenderResponseDto(tender.Id, true);
         }
 
+        // Capture the pre-update values an amendment is detected from.
+        var prevClosing    = existing.ClosingDate;
+        var prevCorrigenda = existing.CorrigendumCount;
+
         existing.Title            = dto.Title;
         // Set once and keep — the Mongo _id is stable for a tender; never clobber a
         // populated value with a (possibly stale/absent) one from a later upsert.
@@ -82,8 +95,108 @@ public class InternalPipelineService(
         if (dto.RawData is not null) existing.RawData = dto.RawData;
 
         await db.SaveChangesAsync(ct);
+
+        // Amendment = the closing date moved, or the corrigendum count went up. Both are
+        // things an org actively bidding on this tender needs to know immediately.
+        var closingChanged = existing.ClosingDate.HasValue && prevClosing.HasValue
+                             && existing.ClosingDate != prevClosing;
+        var corrigendumUp  = existing.CorrigendumCount > prevCorrigenda;
+        if (closingChanged || corrigendumUp)
+            await NotifyTenderAmendedAsync(existing, closingChanged, ct);
+
         return new UpsertTenderResponseDto(existing.Id, false);
     }
+
+    /// <summary>
+    /// Notify every org with an OPEN bid on this tender that it was amended. One claim per
+    /// (tender, org, signature) in notification_reminders dedups repeated upserts of the same
+    /// change. Recipients = each org's bid assignees + bid managers. Never throws.
+    /// </summary>
+    private async Task NotifyTenderAmendedAsync(Tender tender, bool closingChanged, CancellationToken ct)
+    {
+        try
+        {
+            var bids = await db.Bids
+                .AsNoTracking()
+                .Where(b => b.TenderId == tender.Id && b.StatusCategory == "open")
+                .Select(b => new { b.OrgId, b.AssignedTo })
+                .ToListAsync(ct);
+            if (bids.Count == 0) return;
+
+            // Signature so the same amendment isn't re-sent on later upserts.
+            var sig = closingChanged
+                ? (tender.ClosingDate?.ToString("yyyyMMdd") ?? "nd")
+                : $"c{tender.CorrigendumCount}";
+
+            var changeText = closingChanged && tender.ClosingDate.HasValue
+                ? $"The closing date is now {tender.ClosingDate.Value:dd MMM yyyy}."
+                : "A new corrigendum was published.";
+
+            // Deep-link by the Mongo id (what the SPA /tenders/:id route resolves by).
+            Guid? entityId = Guid.TryParse(tender.MongoTenderId, out var mid) ? mid : null;
+            var link = entityId is { } e ? $"{FrontendBaseUrl}/tenders/{e}" : $"{FrontendBaseUrl}/tenders";
+
+            foreach (var orgId in bids.Select(b => b.OrgId).Distinct())
+            {
+                // Per-org dedup: org id in the reminder key + org_id column.
+                if (!await TryClaimReminderAsync(orgId, "tender", tender.Id, $"AMENDED:{sig}:{orgId}", ct))
+                    continue;
+
+                // Recipients = this org's assignees on the tender + its bid managers.
+                var targets = new Dictionary<Guid, NotificationAudienceMember>();
+                foreach (var uid in bids.Where(b => b.OrgId == orgId && b.AssignedTo != null)
+                                        .Select(b => b.AssignedTo!.Value).Distinct())
+                {
+                    var m = await audience.ByUserAsync(uid, ct);
+                    if (m is not null) targets[m.UserId] = m;
+                }
+                foreach (var m in await audience.ByRolesAsync(orgId, BidRoles, null, ct))
+                    targets[m.UserId] = m;
+                if (targets.Count == 0) continue;
+
+                foreach (var m in targets.Values)
+                {
+                    var recipients = new List<NotificationRecipientDto>
+                    {
+                        new(NotificationChannel.InApp, m.UserId.ToString()),
+                    };
+                    if (!string.IsNullOrWhiteSpace(m.Email))
+                        recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, m.Email!));
+
+                    await notifications.SendAsync(new SendNotificationDto(
+                        Category:     NotificationCategory.Transactional,
+                        TemplateCode: "TENDER_AMENDED",
+                        UserId:       m.UserId,
+                        Payload: new Dictionary<string, object>
+                        {
+                            ["FirstName"]   = FirstNameOf(m.Name),
+                            ["TenderTitle"] = tender.Title,
+                            ["ChangeText"]  = changeText,
+                            ["OrgId"]       = orgId.ToString(),
+                            ["EntityId"]    = entityId?.ToString() ?? string.Empty,
+                            ["Link"]        = link,
+                        },
+                        Recipients: recipients), ct);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TENDER_AMENDED notification failed for tender {TenderId}", tender.Id);
+        }
+    }
+
+    private async Task<bool> TryClaimReminderAsync(Guid orgId, string entityType, Guid entityId, string key, CancellationToken ct)
+    {
+        var rows = await db.Database.ExecuteSqlInterpolatedAsync($@"
+            INSERT INTO notification_reminders (org_id, entity_type, entity_id, reminder_key)
+            VALUES ({orgId}, {entityType}, {entityId}, {key})
+            ON CONFLICT (entity_type, entity_id, reminder_key) DO NOTHING", ct);
+        return rows == 1;
+    }
+
+    private static string FirstNameOf(string? fullName)
+        => string.IsNullOrWhiteSpace(fullName) ? "there" : fullName.Trim().Split(' ')[0];
 
     public async Task<BackfillTenderMongoIdResultDto> BackfillTenderMongoIdsAsync(
         int batchSize, CancellationToken ct = default)

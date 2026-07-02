@@ -93,7 +93,7 @@ public class BidsController(IBidService bidService, IBidAttachmentService attach
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateBidDto dto, CancellationToken ct)
     {
-        var bid = await bidService.UpdateAsync(id, CurrentOrgId, dto, ct);
+        var bid = await bidService.UpdateAsync(id, CurrentOrgId, CurrentUserId, dto, ct);
         return Ok(bid);
     }
 

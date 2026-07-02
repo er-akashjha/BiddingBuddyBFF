@@ -57,6 +57,13 @@ builder.Services
 // Scheduled tender-alert scan — turns newly-added tenders into per-org digest emails.
 builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.TenderMatchScanWorker>();
 
+// Scheduled deadline/expiry scan — turns approaching/passed dates (bids, invoices,
+// compliance, delivery, EMD) into one-time in-app + email reminders.
+builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.DeadlineScanWorker>();
+
+// Weekly org-summary digest (open bids, due-this-week, overdue, won) → owners + admins.
+builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.WeeklyDigestWorker>();
+
 // ── JWT Authentication ────────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is not configured.");

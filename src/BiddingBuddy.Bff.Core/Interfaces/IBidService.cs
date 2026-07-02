@@ -20,7 +20,7 @@ public interface IBidService
 
     Task<BidDetailDto> GetAsync(Guid bidId, Guid orgId, CancellationToken ct = default);
     Task<BidDetailDto> CreateAsync(Guid orgId, Guid userId, CreateBidDto dto, CancellationToken ct = default);
-    Task<BidDetailDto> UpdateAsync(Guid bidId, Guid orgId, UpdateBidDto dto, CancellationToken ct = default);
+    Task<BidDetailDto> UpdateAsync(Guid bidId, Guid orgId, Guid actorId, UpdateBidDto dto, CancellationToken ct = default);
     Task<BidDetailDto> ChangeStageAsync(Guid bidId, Guid orgId, Guid actorId, ChangeStageDto dto, CancellationToken ct = default);
     Task DeleteAsync(Guid bidId, Guid orgId, CancellationToken ct = default);
 
