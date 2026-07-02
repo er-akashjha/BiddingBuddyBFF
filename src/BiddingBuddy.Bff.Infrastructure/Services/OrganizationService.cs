@@ -61,7 +61,8 @@ public class OrganizationService(
             ?? throw new KeyNotFoundException("Organization not found.");
 
         var role = org.Members.FirstOrDefault(m => m.UserId == userId)?.Role ?? "viewer";
-        return MapToDetail(org, role);
+        var stats = await ComputeMemberStatsAsync(orgId, ct);
+        return MapToDetail(org, role, stats);
     }
 
     public async Task<OrgDetailDto> UpdateAsync(Guid orgId, Guid userId, UpdateOrgDto dto, CancellationToken ct = default)
@@ -105,7 +106,8 @@ public class OrganizationService(
             .OrderBy(m => m.JoinedAt)
             .ToListAsync(ct);
 
-        return members.Select(MapMember).ToList();
+        var stats = await ComputeMemberStatsAsync(orgId, ct);
+        return members.Select(m => MapMember(m, stats.GetValueOrDefault(m.UserId))).ToList();
     }
 
     public async Task<IReadOnlyList<PendingInviteDto>> GetPendingInvitesAsync(Guid orgId, CancellationToken ct = default)
@@ -188,9 +190,11 @@ public class OrganizationService(
             var deepLink = BuildDeepLink(orgId);
             await SendInvitationAsync(invitedBy, user.Id, user.Email, user.Name, orgId, deepLink, ct);
 
+            var stats = await ComputeMemberStatsAsync(orgId, ct);
+
             return new InviteMemberResultDto(
                 Status:       "added",
-                Member:       MapMember(existing),
+                Member:       MapMember(existing, stats.GetValueOrDefault(existing.UserId)),
                 InvitedEmail: null,
                 ExpiresAt:    null);
         }
@@ -258,7 +262,8 @@ public class OrganizationService(
         if (dto.Role is not null && dto.Role != previousRole && member.UserId != requestingUserId)
             await NotifyMemberRoleChangedAsync(member, requestingUserId, orgId, ct);
 
-        return MapMember(member);
+        var stats = await ComputeMemberStatsAsync(orgId, ct);
+        return MapMember(member, stats.GetValueOrDefault(member.UserId));
     }
 
     /// <summary>
@@ -322,7 +327,86 @@ public class OrganizationService(
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<IReadOnlyList<OrgActivityDto>> GetRecentActivitiesAsync(Guid orgId, Guid requestingUserId, int limit, CancellationToken ct = default)
+    {
+        await RequireMemberAsync(orgId, requestingUserId, ct);
+
+        limit = Math.Clamp(limit, 1, 100);
+
+        return await db.BidActivities
+            .Where(a => a.Bid.OrgId == orgId)
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(limit)
+            .Select(a => new OrgActivityDto(
+                a.Id,
+                a.ActorId,
+                a.Actor.Name,
+                a.Action,
+                a.FromValue,
+                a.ToValue,
+                a.Note,
+                a.BidId,
+                a.Bid.Title,
+                a.CreatedAt))
+            .ToListAsync(ct);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>Per-user aggregates surfaced on <see cref="OrgMemberDto"/>. `default` = all zeros / null win rate.</summary>
+    private readonly record struct MemberStats(int ActiveBids, decimal? WinRate, int TasksDone);
+
+    /// <summary>
+    /// Compute member stats for the whole org with three grouped queries (no per-member loops),
+    /// keyed by <b>user id</b> (bids.assigned_to / checklist done_by reference users, not membership rows).
+    /// </summary>
+    private async Task<Dictionary<Guid, MemberStats>> ComputeMemberStatsAsync(Guid orgId, CancellationToken ct)
+    {
+        // Open bids currently assigned to each user (status_category is the generated open|closed column).
+        var active = await db.Bids
+            .Where(b => b.OrgId == orgId && b.AssignedTo != null && b.StatusCategory == "open")
+            .GroupBy(b => b.AssignedTo!.Value)
+            .Select(g => new { UserId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
+
+        // Decided bids (won|lost — 'dropped' is closed but not a decision) per assignee.
+        var decided = await db.Bids
+            .Where(b => b.OrgId == orgId && b.AssignedTo != null && (b.Stage == "won" || b.Stage == "lost"))
+            .GroupBy(b => b.AssignedTo!.Value)
+            .Select(g => new { UserId = g.Key, Won = g.Count(b => b.Stage == "won"), Total = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => new { x.Won, x.Total }, ct);
+
+        // Checklist items completed by each user, org-wide.
+        var tasks = await db.BidChecklistItems
+            .Where(i => i.OrgId == orgId && i.IsDone && i.DoneBy != null)
+            .GroupBy(i => i.DoneBy!.Value)
+            .Select(g => new { UserId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
+
+        var result = new Dictionary<Guid, MemberStats>();
+        foreach (var uid in active.Keys.Union(decided.Keys).Union(tasks.Keys))
+        {
+            decimal? winRate = null;
+            if (decided.TryGetValue(uid, out var d) && d.Total > 0)
+                winRate = Math.Round(d.Won * 100m / d.Total, 1);
+
+            result[uid] = new MemberStats(
+                active.GetValueOrDefault(uid),
+                winRate,
+                tasks.GetValueOrDefault(uid));
+        }
+        return result;
+    }
+
+    /// <summary>Read-guard: the caller must be an active member of the org (any role).</summary>
+    private async Task RequireMemberAsync(Guid orgId, Guid userId, CancellationToken ct)
+    {
+        var isMember = await db.OrgMembers
+            .AnyAsync(m => m.OrgId == orgId && m.UserId == userId && m.Status == "active", ct);
+
+        if (!isMember)
+            throw new UnauthorizedAccessException("Not a member of this organization.");
+    }
 
     private Task<Organization> LoadOrgAsync(Guid orgId, CancellationToken ct)
         => db.Organizations.FirstOrDefaultAsync(o => o.Id == orgId, ct)
@@ -339,22 +423,23 @@ public class OrganizationService(
             throw new UnauthorizedAccessException("Insufficient permissions.");
     }
 
-    private static OrgDetailDto MapToDetail(Organization org, string userRole)
+    private static OrgDetailDto MapToDetail(Organization org, string userRole, Dictionary<Guid, MemberStats> stats)
         => new(
             org.Id, org.Name, org.Slug, org.Gstin, org.Pan,
             org.Industry, org.CompanySize, org.RegisteredAddress,
             org.City, org.State, org.Pincode, org.Website,
             org.GemSellerId, org.PrimaryCategory, org.LogoUrl,
             org.IsActive, userRole, org.CreatedAt,
-            org.Members.Select(MapMember).ToList());
+            org.Members.Select(m => MapMember(m, stats.GetValueOrDefault(m.UserId))).ToList());
 
-    private static OrgMemberDto MapMember(OrgMember m) => new(
+    private static OrgMemberDto MapMember(OrgMember m, MemberStats stats = default) => new(
         m.Id, m.UserId,
         m.User?.Name ?? string.Empty,
         m.User?.Email ?? string.Empty,
         m.User?.AvatarUrl,
         m.Role, m.Department, m.Status,
-        m.JoinedAt);
+        m.JoinedAt,
+        stats.ActiveBids, stats.WinRate, stats.TasksDone);
 
     /// <summary>
     /// Fire-and-forget TEAM_INVITATION notification. Failures are logged but never
