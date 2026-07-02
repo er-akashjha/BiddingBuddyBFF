@@ -64,7 +64,30 @@ public record OrgMemberDto(
     string Role,
     string? Department,
     string Status,
-    DateTime? JoinedAt
+    DateTime? JoinedAt,
+
+    /// <summary>Bids currently assigned to this member's user id with <c>status_category = 'open'</c>.</summary>
+    int ActiveBidsCount,
+
+    /// <summary>won / (won + lost) as a 0–100 percentage. <c>null</c> when the member has no decided bids.</summary>
+    decimal? WinRate,
+
+    /// <summary>Checklist items this user completed (<c>done_by = user_id AND is_done</c>), org-wide.</summary>
+    int TasksDoneCount
+);
+
+/// <summary>One org-wide activity feed entry — a <c>bid_activities</c> row joined to actor + bid.</summary>
+public record OrgActivityDto(
+    Guid Id,
+    Guid ActorId,
+    string? ActorName,
+    string Action,
+    string? FromValue,
+    string? ToValue,
+    string? Note,
+    Guid BidId,
+    string BidTitle,
+    DateTime CreatedAt
 );
 
 public record InviteMemberDto(string Email, string Role, string? Department);

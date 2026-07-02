@@ -20,4 +20,8 @@ public interface IOrganizationService
     Task RevokePendingInviteAsync(Guid orgId, Guid inviteId, Guid requestingUserId, CancellationToken ct = default);
     Task<OrgMemberDto> UpdateMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, UpdateMemberDto dto, CancellationToken ct = default);
     Task RemoveMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, CancellationToken ct = default);
+
+    /// <summary>Recent bid activity across the whole org (newest first), joined to actor name + bid title.
+    /// Caller must be an active member of the org.</summary>
+    Task<IReadOnlyList<OrgActivityDto>> GetRecentActivitiesAsync(Guid orgId, Guid requestingUserId, int limit, CancellationToken ct = default);
 }

@@ -194,6 +194,7 @@ public class ComplianceRequirementConfiguration : IEntityTypeConfiguration<Compl
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => x.OrgId);
         b.HasMany(x => x.Documents).WithOne(x => x.Requirement).HasForeignKey(x => x.RequirementId);
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
     }
 }
 
@@ -216,6 +217,7 @@ public class ComplianceDocumentConfiguration : IEntityTypeConfiguration<Complian
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => x.OrgId);
         b.HasOne(x => x.Document).WithMany().HasForeignKey(x => x.DocumentId).IsRequired(false);
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
     }
 }
 
@@ -310,6 +312,43 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
         b.HasOne(x => x.Bid).WithMany().HasForeignKey(x => x.BidId).IsRequired(false);
         b.HasOne(x => x.Tender).WithMany().HasForeignKey(x => x.TenderId).IsRequired(false);
+    }
+}
+
+public class OrderItemConfiguration : IEntityTypeConfiguration<OrderItem>
+{
+    public void Configure(EntityTypeBuilder<OrderItem> b)
+    {
+        b.ToTable("order_items");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.OrderId).HasColumnName("order_id");
+        b.Property(x => x.OrgId).HasColumnName("org_id");
+        b.Property(x => x.Description).HasColumnName("description").IsRequired();
+        b.Property(x => x.Quantity).HasColumnName("quantity");
+        b.Property(x => x.UnitPrice).HasColumnName("unit_price").HasPrecision(15, 2);
+        b.Property(x => x.TotalPrice).HasColumnName("total_price").HasPrecision(15, 2);
+        b.Property(x => x.HsnCode).HasColumnName("hsn_code");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasIndex(x => x.OrderId);
+    }
+}
+
+public class DeliveryMilestoneConfiguration : IEntityTypeConfiguration<DeliveryMilestone>
+{
+    public void Configure(EntityTypeBuilder<DeliveryMilestone> b)
+    {
+        b.ToTable("delivery_milestones");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.OrderId).HasColumnName("order_id");
+        b.Property(x => x.OrgId).HasColumnName("org_id");
+        b.Property(x => x.Title).HasColumnName("title").IsRequired();
+        b.Property(x => x.DueDate).HasColumnName("due_date");
+        b.Property(x => x.CompletedAt).HasColumnName("completed_at");
+        b.Property(x => x.Notes).HasColumnName("notes");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasIndex(x => x.OrderId);
     }
 }
 
@@ -460,6 +499,10 @@ public class UserNotificationConfiguration : IEntityTypeConfiguration<UserNotifi
         b.Property(x => x.ReadAt).HasColumnName("read_at");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.HasIndex(x => new { x.UserId, x.IsRead });
+        // Without these, EF invents a shadow "OrganizationId" FK column and full-entity
+        // reads fail with 42703 (the org_id column is the real FK).
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
+        b.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId);
     }
 }
 

@@ -62,6 +62,19 @@ public class OrganizationsController(IOrganizationService orgService) : BffContr
     }
 
     /// <summary>
+    /// Recent bid activity across the whole organization (newest first) — powers
+    /// the SPA Team page's Activity Log tab. Caller must be an active org member.
+    /// </summary>
+    [HttpGet("{id:guid}/activities")]
+    [ProducesResponseType(typeof(IReadOnlyList<OrgActivityDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetActivities(Guid id, [FromQuery] int limit = 20, CancellationToken ct = default)
+    {
+        var activities = await orgService.GetRecentActivitiesAsync(id, CurrentUserId, limit, ct);
+        return Ok(activities);
+    }
+
+    /// <summary>
     /// Invite a user to the organization by email (owner or admin only).
     /// If the email belongs to an existing user, they're added immediately
     /// (response <c>status="added"</c>, populated <c>member</c>). Otherwise a

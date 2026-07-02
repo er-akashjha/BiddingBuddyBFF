@@ -62,7 +62,11 @@ public record TenderDetailDto(
     // ── Scraped source documents (the actual GeM PDFs in S3) ──
     IReadOnlyList<TenderSourceDocumentDto> SourceDocuments,
     // ── Full timeline (publishedAt / bidStartAt / bidEndAt / bidOpeningAt / validityDays / contractDuration) ──
-    TenderTimelineDto? Timeline
+    TenderTimelineDto? Timeline,
+    // ── Direct link to the tender on its source portal (e.g. the eprocure/GePNIC detail page) ──
+    string? SourceUrl = null,
+    // ── Technical specifications extracted from the tender PDF (authoritative, not AI-guessed) ──
+    IReadOnlyList<TenderTechSpecDto>? TechnicalSpecifications = null
 );
 
 /// <summary>
