@@ -16,6 +16,18 @@ public interface IOrganizationService
 
     Task<InviteMemberResultDto> InviteMemberAsync(Guid orgId, Guid invitedBy, InviteMemberDto dto, CancellationToken ct = default);
 
+    /// <summary>Resolve a raw invite token to what the accept page shows (org, inviter, role).
+    /// Throws <c>InvalidOperationException("INVITE_INVALID")</c> for unknown/expired/consumed tokens.</summary>
+    Task<InvitePreviewDto> GetInvitePreviewAsync(string token, CancellationToken ct = default);
+
+    /// <summary>Consume an invite token as the logged-in user: creates (or reactivates) the
+    /// membership. The caller's email must match the invited email.</summary>
+    Task<AcceptInviteResultDto> AcceptInviteAsync(Guid userId, string token, CancellationToken ct = default);
+
+    /// <summary>Decline an invite as the logged-in user — consumes the token without
+    /// creating a membership. The caller's email must match the invited email.</summary>
+    Task DeclineInviteAsync(Guid userId, string token, CancellationToken ct = default);
+
     /// <summary>Revoke a pending invite (sets <c>accepted_at = now</c> so the token can no longer be redeemed).</summary>
     Task RevokePendingInviteAsync(Guid orgId, Guid inviteId, Guid requestingUserId, CancellationToken ct = default);
     Task<OrgMemberDto> UpdateMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, UpdateMemberDto dto, CancellationToken ct = default);

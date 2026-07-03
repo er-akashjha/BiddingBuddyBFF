@@ -75,20 +75,27 @@ public class OrganizationsController(IOrganizationService orgService) : BffContr
     }
 
     /// <summary>
-    /// Invite a user to the organization by email (owner or admin only).
-    /// If the email belongs to an existing user, they're added immediately
-    /// (response <c>status="added"</c>, populated <c>member</c>). Otherwise a
-    /// pending invite is created and an email with a registration link is sent
-    /// (response <c>status="invited"</c>, populated <c>invitedEmail</c> + <c>expiresAt</c>).
+    /// Invite a user to the organization by email (owner or admin only). Always creates
+    /// a pending invite (<c>status="invited"</c>) — membership requires the invitee's
+    /// explicit confirmation. Existing users get an email linking to the SPA accept page;
+    /// unregistered emails get a registration link. 409 if already an active member.
     /// </summary>
     [HttpPost("{id:guid}/members")]
     [ProducesResponseType(typeof(InviteMemberResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> InviteMember(Guid id, [FromBody] InviteMemberDto dto, CancellationToken ct)
     {
-        var result = await orgService.InviteMemberAsync(id, CurrentUserId, dto, ct);
-        return Ok(result);
+        try
+        {
+            var result = await orgService.InviteMemberAsync(id, CurrentUserId, dto, ct);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "ALREADY_MEMBER")
+        {
+            return Conflict(new { error = "ALREADY_MEMBER" });
+        }
     }
 
     /// <summary>

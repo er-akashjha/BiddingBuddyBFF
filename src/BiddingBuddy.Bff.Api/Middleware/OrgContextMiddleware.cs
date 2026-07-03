@@ -10,7 +10,9 @@ namespace BiddingBuddy.Bff.Api.Middleware;
 /// </summary>
 public class OrgContextMiddleware(RequestDelegate next)
 {
-    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/internal", "/swagger", "/health", "/sitemap"];
+    // /api/invites is exempt because the caller is by definition not yet a member
+    // of the org the invite points at (accept/decline happen before membership).
+    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/internal", "/swagger", "/health", "/sitemap"];
 
     public async Task InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo)
     {

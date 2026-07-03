@@ -104,20 +104,46 @@ public record PendingInviteDto(
     DateTime CreatedAt
 );
 
-/// <summary>Discriminated response for <c>POST /api/organizations/{id}/members</c>.</summary>
+/// <summary>Response for <c>POST /api/organizations/{id}/members</c>.</summary>
 public record InviteMemberResultDto(
-    /// <summary><c>"added"</c> when the invitee already had a user account and is now an active member;
-    /// <c>"invited"</c> when the invitee did not exist and a pending invite was emailed.</summary>
+    /// <summary>Always <c>"invited"</c> — membership is never granted at invite time.
+    /// Existing users confirm via the emailed accept page; new users register with the
+    /// token. (<c>"added"</c> was the pre-confirmation-flow value and is no longer produced.)</summary>
     string Status,
 
-    /// <summary>Populated when <see cref="Status"/> is <c>"added"</c>.</summary>
+    /// <summary>Legacy field from the instant-add flow; always <c>null</c> now.</summary>
     OrgMemberDto? Member,
 
-    /// <summary>Populated when <see cref="Status"/> is <c>"invited"</c> — the email the invitation was sent to.</summary>
+    /// <summary>The email the invitation was sent to.</summary>
     string? InvitedEmail,
 
-    /// <summary>Populated when <see cref="Status"/> is <c>"invited"</c> — when the invite token stops working.</summary>
+    /// <summary>When the invite token stops working.</summary>
     DateTime? ExpiresAt
 );
+
+/// <summary>
+/// What the SPA's accept-invite page shows before the invitee decides. Fetched
+/// anonymously — the single-use token in the link is the credential.
+/// </summary>
+public record InvitePreviewDto(
+    string OrgName,
+    string? OrgLogoUrl,
+    string InviterName,
+    string Role,
+    /// <summary>The invited email (lowercased). The page uses it to detect a
+    /// logged-in-as-someone-else mismatch client-side.</summary>
+    string Email,
+    DateTime ExpiresAt,
+    /// <summary>True when a user account already exists for the invited email —
+    /// the page routes to sign-in; false routes to signup with the token.</summary>
+    bool InviteeHasAccount
+);
+
+/// <summary>Result of <c>POST /api/invites/accept</c> — the org the user just joined,
+/// so the SPA can switch its active-org context to it.</summary>
+public record AcceptInviteResultDto(Guid OrgId, string OrgName, string Role);
+
+/// <summary>Body for <c>POST /api/invites/accept</c> and <c>/decline</c>.</summary>
+public record InviteTokenDto(string Token);
 
 public record UpdateMemberDto(string? Role, string? Department, string? Status);
