@@ -245,7 +245,41 @@ public class OrganizationService(
     {
         var invite = await FindPendingInviteByTokenAsync(token, ct);
         await RequireInviteeMatchAsync(invite, userId, ct);
+        return await AcceptPendingInviteAsync(invite, userId, ct);
+    }
 
+    public async Task<IReadOnlyList<MyInviteDto>> GetMyPendingInvitesAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await userRepo.FindByIdAsync(userId, ct)
+            ?? throw new KeyNotFoundException("User not found.");
+        var email = user.Email.Trim().ToLowerInvariant();
+
+        var now = DateTime.UtcNow;
+        return await (
+            from i in db.OrganizationInvites
+            where i.Email.ToLower() == email && i.AcceptedAt == null && i.ExpiresAt > now
+            join o in db.Organizations on i.OrgId equals o.Id
+            join u in db.Users on i.InvitedBy equals u.Id into inviters
+            from u in inviters.DefaultIfEmpty()
+            orderby i.CreatedAt descending
+            select new MyInviteDto(i.Id, o.Name, o.LogoUrl, u != null ? u.Name : string.Empty, i.Role, i.ExpiresAt)
+        ).ToListAsync(ct);
+    }
+
+    public async Task<AcceptInviteResultDto> AcceptInviteByIdAsync(Guid userId, Guid inviteId, CancellationToken ct = default)
+    {
+        var invite = await db.OrganizationInvites.FirstOrDefaultAsync(i => i.Id == inviteId, ct);
+        if (invite is null || invite.AcceptedAt is not null || invite.ExpiresAt < DateTime.UtcNow)
+            throw new InvalidOperationException("INVITE_INVALID");
+
+        await RequireInviteeMatchAsync(invite, userId, ct);
+        return await AcceptPendingInviteAsync(invite, userId, ct);
+    }
+
+    /// <summary>Shared accept body: create/reactivate the membership and consume the invite.
+    /// Callers have already resolved a live invite and verified the invitee email matches.</summary>
+    private async Task<AcceptInviteResultDto> AcceptPendingInviteAsync(OrganizationInvite invite, Guid userId, CancellationToken ct)
+    {
         var member = await db.OrgMembers
             .FirstOrDefaultAsync(m => m.OrgId == invite.OrgId && m.UserId == userId, ct);
 

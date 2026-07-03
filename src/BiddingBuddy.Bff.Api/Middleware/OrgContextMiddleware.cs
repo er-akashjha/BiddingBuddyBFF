@@ -23,6 +23,16 @@ public class OrgContextMiddleware(RequestDelegate next)
             return;
         }
 
+        // Creating your very first organization is inherently pre-org — a social
+        // signup has no X-Org-Id to send yet. Exempt exactly POST /api/organizations
+        // (the collection route only; subroutes stay org-scoped).
+        if (HttpMethods.IsPost(ctx.Request.Method) &&
+            path.TrimEnd('/').Equals("/api/organizations", StringComparison.OrdinalIgnoreCase))
+        {
+            await next(ctx);
+            return;
+        }
+
         // Only enforce on authenticated requests
         if (!ctx.User.Identity?.IsAuthenticated ?? true)
         {

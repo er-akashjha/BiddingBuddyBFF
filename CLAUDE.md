@@ -30,7 +30,7 @@ BiddingBuddyBFF/
         ├── Repositories/
         └── Services/
             ├── AuthService.cs               JWT minting, refresh token rotation
-            ├── OAuthProviderService.cs      Google + GitHub OAuth 2.0 code exchange
+            ├── OAuthProviderService.cs      Google + Facebook + GitHub OAuth 2.0 code exchange
             ├── DbMigrator.cs                Runs embedded *.sql scripts via /internal/migrations
             ├── RabbitMqPublisher.cs         Singleton RabbitMQ producer
             ├── NotificationPublisher.cs     Insert event/deliveries then publish trigger
@@ -72,10 +72,10 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 ### Public (no auth)
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/auth/oauth/{provider}` | Initiate OAuth (Google/GitHub) |
+| GET | `/api/auth/oauth/{provider}` | Initiate OAuth (Google/Facebook/GitHub) |
 | GET | `/api/auth/oauth/{provider}/callback` | OAuth code exchange |
 | POST | `/api/auth/refresh` | Rotate refresh → new access + refresh token |
-| GET | `/api/auth/providers` | List enabled OAuth providers |
+| GET | `/api/auth/providers` | List enabled OAuth providers (`OAuth:{Provider}:Enabled` flags, default true; disabled providers also 400 on initiation) |
 | GET | `/api/invites/preview?token=` | Invite details for the SPA accept page (token = credential) |
 
 ### Authenticated (Bearer JWT + `X-Org-Id` header required for org-scoped routes)
@@ -195,7 +195,8 @@ the backing table + entity (`UserNotification`) were renamed.
   },
   "OAuth": {
     "Google": { "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/google/callback" },
-    "GitHub": { "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/github/callback" }
+    "GitHub": { "Enabled": true, "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/github/callback" },
+    "Facebook": { "Enabled": true, "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/facebook/callback" }
   },
   "Frontend": { "BaseUrl": "http://localhost:3000", "AuthCallbackPath": "/auth/callback" },
   "Pipeline": { "ApiKey": "pipeline_internal_secret_CHANGE_ME" },

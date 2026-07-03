@@ -62,6 +62,43 @@ public class InvitesController(IOrganizationService orgService) : BffControllerB
         }
     }
 
+    /// <summary>
+    /// Pending invites addressed to the logged-in user's email — powers the onboarding
+    /// "join your team" branch for social signups (who never received a signup-time token
+    /// exchange). Carries no tokens; accept is via <c>POST /api/invites/{id}/accept</c>.
+    /// </summary>
+    [HttpGet("mine")]
+    [Authorize]
+    [ProducesResponseType(typeof(IReadOnlyList<MyInviteDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Mine(CancellationToken ct)
+        => Ok(await orgService.GetMyPendingInvitesAsync(CurrentUserId, ct));
+
+    /// <summary>
+    /// Accept a pending invite by id, without the emailed token. Being authenticated as
+    /// the invited email is the credential — the same ownership proof the token path
+    /// enforces via <c>RequireInviteeMatch</c>, minus the emailed secret.
+    /// </summary>
+    [HttpPost("{id:guid}/accept")]
+    [Authorize]
+    [ProducesResponseType(typeof(AcceptInviteResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AcceptById(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await orgService.AcceptInviteByIdAsync(CurrentUserId, id, ct));
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "INVITE_INVALID")
+        {
+            return NotFound(new { error = "INVITE_INVALID" });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "INVITE_EMAIL_MISMATCH")
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "INVITE_EMAIL_MISMATCH" });
+        }
+    }
+
     /// <summary>Decline an invite — consumes the token without creating a membership.</summary>
     [HttpPost("decline")]
     [Authorize]

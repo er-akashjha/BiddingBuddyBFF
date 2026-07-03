@@ -24,6 +24,14 @@ public interface IOrganizationService
     /// membership. The caller's email must match the invited email.</summary>
     Task<AcceptInviteResultDto> AcceptInviteAsync(Guid userId, string token, CancellationToken ct = default);
 
+    /// <summary>Pending (unconsumed, unexpired) invites addressed to the logged-in user's
+    /// email — the onboarding page offers these as "join your team" before creating a new org.</summary>
+    Task<IReadOnlyList<MyInviteDto>> GetMyPendingInvitesAsync(Guid userId, CancellationToken ct = default);
+
+    /// <summary>Accept a pending invite by id, without the emailed token. Being authenticated
+    /// as the invited email is the credential (a stronger proof than holding the link).</summary>
+    Task<AcceptInviteResultDto> AcceptInviteByIdAsync(Guid userId, Guid inviteId, CancellationToken ct = default);
+
     /// <summary>Decline an invite as the logged-in user — consumes the token without
     /// creating a membership. The caller's email must match the invited email.</summary>
     Task DeclineInviteAsync(Guid userId, string token, CancellationToken ct = default);

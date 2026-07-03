@@ -425,7 +425,7 @@ public class AuthService(
         if (isNewUser)
             await SendWelcomeAsync(user, organizationName: null, ct);
 
-        return tokens;
+        return tokens with { IsNewUser = isNewUser };
     }
 
     public async Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default)

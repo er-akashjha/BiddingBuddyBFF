@@ -15,7 +15,13 @@ public class AuthController(
     IOAuthProviderService oauthProvider,
     IConfiguration config) : ControllerBase
 {
-    private static readonly HashSet<string> SupportedProviders = ["google", "github"];
+    // Order here is the canonical display order for GET /api/auth/providers.
+    private static readonly string[] SupportedProviders = ["google", "facebook", "github"];
+
+    /// <summary>A supported provider is enabled unless <c>OAuth:{Provider}:Enabled</c> is
+    /// explicitly false (config keys are case-insensitive, so the lowercase name works).</summary>
+    private bool IsProviderEnabled(string provider)
+        => config.GetValue<bool?>($"OAuth:{provider}:Enabled") ?? true;
 
     /// <summary>
     /// Begin a password signup. Sends a 6-digit verification code to the email and
@@ -139,14 +145,24 @@ public class AuthController(
         }
     }
 
-    /// <summary>Redirect the browser to the OAuth provider consent page (Google or GitHub).</summary>
+    /// <summary>
+    /// OAuth providers currently enabled for sign-in — drives which social buttons the
+    /// SPA renders on login/signup. Anonymous by design (the pages are public).
+    /// </summary>
+    [HttpGet("providers")]
+    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+    public IActionResult ListEnabledProviders()
+        => Ok(new { providers = SupportedProviders.Where(IsProviderEnabled).ToArray() });
+
+    /// <summary>Redirect the browser to the OAuth provider consent page (Google, Facebook or GitHub).</summary>
     [HttpGet("oauth/{provider}")]
     [ProducesResponseType(StatusCodes.Status302Found)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public IActionResult InitiateOAuth(string provider, [FromQuery] string returnUrl = "/")
     {
         provider = provider.ToLower();
-        if (!SupportedProviders.Contains(provider))
+        // Disabled providers are rejected here too — hiding the button isn't the gate.
+        if (!SupportedProviders.Contains(provider) || !IsProviderEnabled(provider))
             return BadRequest(new { error = $"Provider '{provider}' is not supported." });
 
         var state = tokenService.GenerateStateToken(returnUrl);
@@ -164,7 +180,7 @@ public class AuthController(
         CancellationToken ct)
     {
         provider = provider.ToLower();
-        if (!SupportedProviders.Contains(provider))
+        if (!SupportedProviders.Contains(provider) || !IsProviderEnabled(provider))
             return BadRequest(new { error = "Unsupported provider." });
 
         if (!tokenService.TryValidateStateToken(state, out var returnUrl))
@@ -176,10 +192,13 @@ public class AuthController(
 
             var frontendBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
             var callbackPath = config["Frontend:AuthCallbackPath"] ?? "/auth/callback";
+            // is_new is a cosmetic hint for the SPA (welcome copy) — onboarding routing
+            // is gated on "authenticated but no org", not on this flag.
             var redirectUrl = $"{frontendBase}{callbackPath}" +
                               $"?access_token={Uri.EscapeDataString(tokens.AccessToken)}" +
                               $"&refresh_token={Uri.EscapeDataString(tokens.RefreshToken)}" +
                               $"&expires_in={tokens.ExpiresIn}" +
+                              $"&is_new={(tokens.IsNewUser ? "1" : "0")}" +
                               $"&return_url={Uri.EscapeDataString(returnUrl)}";
 
             return Redirect(redirectUrl);

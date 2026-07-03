@@ -143,6 +143,20 @@ public record InvitePreviewDto(
 /// so the SPA can switch its active-org context to it.</summary>
 public record AcceptInviteResultDto(Guid OrgId, string OrgName, string Role);
 
+/// <summary>
+/// One pending invite addressed to the logged-in user's email — powers the
+/// onboarding "join your team" branch for social signups. Carries no token:
+/// accept is by id, gated on the caller being authenticated as the invited email.
+/// </summary>
+public record MyInviteDto(
+    Guid Id,
+    string OrgName,
+    string? OrgLogoUrl,
+    string InviterName,
+    string Role,
+    DateTime ExpiresAt
+);
+
 /// <summary>Body for <c>POST /api/invites/accept</c> and <c>/decline</c>.</summary>
 public record InviteTokenDto(string Token);
 
