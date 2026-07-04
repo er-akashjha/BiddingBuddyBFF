@@ -177,6 +177,9 @@ public record TenderFacetsDto(
     IReadOnlyList<string> States
 );
 
+/// <summary>Light tender projection for cursor enumeration (sitemap). Mirrors the Services TenderEnumerationItem.</summary>
+public record TenderEnumerationDto(string Id, string Title, DateTime UpdatedAt);
+
 /// <summary>Paged tender list returned to the BFF client (items translated to TenderListItemDto)</summary>
 public record PagedTenderListDto(
     IReadOnlyList<TenderListItemDto> Items,

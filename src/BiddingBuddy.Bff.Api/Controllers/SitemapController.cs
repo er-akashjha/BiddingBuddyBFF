@@ -31,8 +31,10 @@ public class SitemapController(
     /// <summary>URLs per tender chunk file. 50,000 is the spec max; 10k leaves headroom and keeps each fetch light.</summary>
     private const int TenderChunkSize = 10_000;
 
-    /// <summary>Page size used when paging the upstream service to fill one chunk (avoids a single huge request).</summary>
+    /// <summary>Page size for the keyset walk of the upstream enumerate endpoint.</summary>
     private const int FetchPageSize = 1_000;
+
+    private const string TenderLinesKey = "sitemap:tender-lines";
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
 
@@ -43,11 +45,12 @@ public class SitemapController(
 
     /// <summary>Sitemap index — lists the pages sitemap plus one sitemap per tender chunk.</summary>
     [HttpGet("/sitemap.xml")]
-    public Task<IActionResult> Index(CancellationToken ct) =>
-        CachedXml("sitemap:index", async () =>
+    public async Task<IActionResult> Index(CancellationToken ct)
+    {
+        try
         {
-            var total = await GetTotalTenderCountAsync(ct);
-            var chunks = total == 0 ? 0 : (int)Math.Ceiling(total / (double)TenderChunkSize);
+            var lines = await GetAllTenderUrlLinesAsync(ct);
+            var chunks = (int)Math.Ceiling(lines.Count / (double)TenderChunkSize);
 
             var sb = new StringBuilder();
             sb.AppendLine("""<?xml version="1.0" encoding="UTF-8"?>""");
@@ -56,8 +59,14 @@ public class SitemapController(
             for (var i = 1; i <= chunks; i++)
                 AppendSitemapRef(sb, $"{BaseUrl}/sitemap-tenders-{i}.xml");
             sb.AppendLine("</sitemapindex>");
-            return sb.ToString();
-        });
+            return XmlContent(sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to build sitemap index");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+    }
 
     /// <summary>Static public pages (landing, explore, marketing/legal).</summary>
     [HttpGet("/sitemap-pages.xml")]
@@ -81,73 +90,63 @@ public class SitemapController(
     {
         if (index < 1) return NotFound();
 
-        var cacheKey = $"sitemap:tenders:{index}";
-        if (cache.TryGetValue(cacheKey, out string? cached) && cached is not null)
-            return XmlContent(cached);
-
-        var items = await FetchChunkAsync(index, ct);
-        if (items.Count == 0) return NotFound();
-
-        // Drop expired tenders so the sitemap only advertises pages worth indexing.
-        // We filter by closing date (the codebase's own "live" signal — see
-        // MatchingService.IsLive) rather than the status string. Tenders with no
-        // closing date are kept (we can't prove them expired). This is a per-chunk
-        // filter, so the oldest chunk may render fewer (or zero) URLs as its tenders
-        // age out — harmless: Google just sees a smaller/empty urlset.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
-        var sb = new StringBuilder();
-        OpenUrlSet(sb);
-        foreach (var t in items)
+        try
         {
-            if (t.ClosingDate is { } closing && closing < today) continue;   // expired → omit
-            var slug = SeoHelpers.Slugify(t.Title);
-            var seg = slug.Length > 0 ? $"{slug}-{t.Id}" : t.Id.ToString();
-            var lastmod = t.PublishedDate?.ToString("yyyy-MM-dd");
-            AppendUrl(sb, $"{BaseUrl}/explore/{seg}", lastmod);
-        }
-        sb.AppendLine("</urlset>");
+            var lines = await GetAllTenderUrlLinesAsync(ct);
+            var slice = lines.Skip((index - 1) * TenderChunkSize).Take(TenderChunkSize).ToList();
+            if (slice.Count == 0) return NotFound();
 
-        var xml = sb.ToString();
-        cache.Set(cacheKey, xml, CacheTtl);
-        return XmlContent(xml);
+            var sb = new StringBuilder();
+            OpenUrlSet(sb);
+            foreach (var line in slice) sb.AppendLine(line);
+            sb.AppendLine("</urlset>");
+            return XmlContent(sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to build tender sitemap chunk {Index}", index);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<int> GetTotalTenderCountAsync(CancellationToken ct)
+    /// <summary>
+    /// Pre-rendered <c>&lt;url&gt;</c> lines for EVERY tender (full archive — closed
+    /// included), built once via a keyset walk of the enumerate endpoint and cached.
+    /// Keyset (afterId cursor on _id) scales to the whole corpus without the deep-skip
+    /// 400 that the search endpoint hits past ~10k records. lastmod = tender UpdatedAt.
+    /// </summary>
+    private async Task<List<string>> GetAllTenderUrlLinesAsync(CancellationToken ct)
     {
-        var page = await servicesClient.SearchTendersPagedAsync(
-            new TenderSearchQueryDto { Page = 1, PageSize = 1 }, ct);
-        return page.TotalCount;
-    }
+        if (cache.TryGetValue(TenderLinesKey, out List<string>? cached) && cached is not null)
+            return cached;
 
-    /// <summary>Collect up to one chunk worth of tenders, paging the upstream service in safe sub-pages.</summary>
-    private async Task<List<TenderListItemDto>> FetchChunkAsync(int chunkIndex, CancellationToken ct)
-    {
-        var globalOffset = (chunkIndex - 1) * TenderChunkSize;
-        var collected = new List<TenderListItemDto>(Math.Min(TenderChunkSize, FetchPageSize));
-
-        // Stable ordering so chunk boundaries don't shuffle between requests.
-        var subPagesPerChunk = TenderChunkSize / FetchPageSize;   // 10
-        var firstSubPage = globalOffset / FetchPageSize + 1;
-
-        for (var i = 0; i < subPagesPerChunk; i++)
+        var lines = new List<string>(60_000);
+        string? afterId = null;
+        while (true)
         {
-            var result = await servicesClient.SearchTendersPagedAsync(new TenderSearchQueryDto
-            {
-                Page      = firstSubPage + i,
-                PageSize  = FetchPageSize,
-                SortBy    = "published",
-                SortOrder = "desc",
-            }, ct);
+            var batch = await servicesClient.EnumerateTendersAsync(afterId, FetchPageSize, ct);
+            if (batch.Count == 0) break;
 
-            if (result.Items.Count == 0) break;
-            collected.AddRange(result.Items);
-            if (!result.HasNextPage) break;
+            foreach (var t in batch)
+            {
+                var slug = SeoHelpers.Slugify(t.Title);
+                var seg = slug.Length > 0 ? $"{slug}-{t.Id}" : t.Id;
+                var loc = SeoHelpers.XmlEscape($"{BaseUrl}/explore/{seg}");
+                var lastmod = t.UpdatedAt == default ? null : t.UpdatedAt.ToString("yyyy-MM-dd");
+                lines.Add(lastmod is null
+                    ? $"  <url><loc>{loc}</loc></url>"
+                    : $"  <url><loc>{loc}</loc><lastmod>{lastmod}</lastmod></url>");
+                afterId = t.Id;
+            }
+
+            if (batch.Count < FetchPageSize) break;
         }
 
-        return collected;
+        logger.LogInformation("Sitemap: enumerated {Count} tenders", lines.Count);
+        cache.Set(TenderLinesKey, lines, CacheTtl);
+        return lines;
     }
 
     private async Task<IActionResult> CachedXml(string key, Func<Task<string>> build)

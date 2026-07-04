@@ -20,6 +20,14 @@ public interface IBiddingBuddyServicesClient
     Task<List<TenderListItemDto>> SearchTendersAsync(TenderSearchQueryDto query, CancellationToken ct = default);
     Task<PagedTenderListDto> SearchTendersPagedAsync(TenderSearchQueryDto query, CancellationToken ct = default);
 
+    /// <summary>
+    /// Cursor (keyset) enumeration of every tender (id, title, updatedAt), ordered by id.
+    /// Pass the last id as <paramref name="afterId"/> to page forward; an empty list = end.
+    /// Used to build the full sitemap without deep pagination.
+    /// </summary>
+    Task<List<TenderEnumerationDto>> EnumerateTendersAsync(
+        string? afterId, int limit, CancellationToken ct = default);
+
     /// <summary>Default filter option values (top-N categories + states) for the initial dropdown render.</summary>
     Task<TenderFacetsDto> GetTenderFacetsAsync(int limit = 15, CancellationToken ct = default);
 

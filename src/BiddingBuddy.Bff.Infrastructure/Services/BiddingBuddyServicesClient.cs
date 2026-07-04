@@ -160,6 +160,15 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
             HasPreviousPage: rawResult.HasPreviousPage);
     }
 
+    public Task<List<TenderEnumerationDto>> EnumerateTendersAsync(
+        string? afterId, int limit, CancellationToken ct = default)
+    {
+        var qs = HttpUtility.ParseQueryString(string.Empty);
+        if (!string.IsNullOrWhiteSpace(afterId)) qs["afterId"] = afterId;
+        qs["limit"] = limit.ToString();
+        return GetJsonAsync<List<TenderEnumerationDto>>($"api/tenders/enumerate?{qs}", ct);
+    }
+
     public Task<TenderFacetsDto> GetTenderFacetsAsync(int limit = 15, CancellationToken ct = default)
         => GetJsonAsync<TenderFacetsDto>($"api/tenders/facets?limit={limit}", ct);
 

@@ -1,10 +1,18 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v10**
+Current version: **v11**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v11 — 2026-07-04 19:27 IST
+
+### Full-archive sitemap via keyset enumeration
+- `SitemapController` now enumerates **every** tender (full archive, ~56k incl. closed) via a keyset walk of the new BiddingBuddyServices `GET /api/tenders/enumerate` endpoint (cursor by `_id`), replacing deep-`skip` pagination that returned **HTTP 400** past ~10k records (Atlas sort-memory limit). Pre-rendered `<url>` lines are cached 6h; index + chunks slice them (10k/chunk). Removes the expired-tender filter.
+- `SsrController`: closed tenders are now indexable (removed `noindex`-on-closed) — the archive should be crawlable; only genuine 404s stay `noindex`.
+- Adds `IBiddingBuddyServicesClient.EnumerateTendersAsync` + `TenderEnumerationDto`.
+- Verified locally against Atlas: **55,909** tender URLs across 6 chunks (was 918). Requires BiddingBuddyServices enumerate endpoint deployed first.
 
 ## v10 — 2026-07-06 19:30 IST
 
