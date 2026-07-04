@@ -10,12 +10,24 @@ namespace BiddingBuddy.Bff.Api.Middleware;
 /// </summary>
 public class OrgContextMiddleware(RequestDelegate next)
 {
-    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/internal", "/swagger", "/health", "/sitemap"];
+    // /api/invites is exempt because the caller is by definition not yet a member
+    // of the org the invite points at (accept/decline happen before membership).
+    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/internal", "/swagger", "/health", "/sitemap"];
 
     public async Task InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo)
     {
         var path = ctx.Request.Path.Value ?? string.Empty;
         if (SkipPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        {
+            await next(ctx);
+            return;
+        }
+
+        // Creating your very first organization is inherently pre-org — a social
+        // signup has no X-Org-Id to send yet. Exempt exactly POST /api/organizations
+        // (the collection route only; subroutes stay org-scoped).
+        if (HttpMethods.IsPost(ctx.Request.Method) &&
+            path.TrimEnd('/').Equals("/api/organizations", StringComparison.OrdinalIgnoreCase))
         {
             await next(ctx);
             return;

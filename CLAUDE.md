@@ -30,7 +30,7 @@ BiddingBuddyBFF/
         ├── Repositories/
         └── Services/
             ├── AuthService.cs               JWT minting, refresh token rotation
-            ├── OAuthProviderService.cs      Google + GitHub OAuth 2.0 code exchange
+            ├── OAuthProviderService.cs      Google + Facebook + GitHub OAuth 2.0 code exchange
             ├── DbMigrator.cs                Runs embedded *.sql scripts via /internal/migrations
             ├── RabbitMqPublisher.cs         Singleton RabbitMQ producer
             ├── NotificationPublisher.cs     Insert event/deliveries then publish trigger
@@ -72,16 +72,18 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 ### Public (no auth)
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/auth/oauth/{provider}` | Initiate OAuth (Google/GitHub) |
+| GET | `/api/auth/oauth/{provider}` | Initiate OAuth (Google/Facebook/GitHub) |
 | GET | `/api/auth/oauth/{provider}/callback` | OAuth code exchange |
 | POST | `/api/auth/refresh` | Rotate refresh → new access + refresh token |
-| GET | `/api/auth/providers` | List enabled OAuth providers |
+| GET | `/api/auth/providers` | List enabled OAuth providers (`OAuth:{Provider}:Enabled` flags, default true; disabled providers also 400 on initiation) |
+| GET | `/api/invites/preview?token=` | Invite details for the SPA accept page (token = credential) |
 
 ### Authenticated (Bearer JWT + `X-Org-Id` header required for org-scoped routes)
 | Controller | Base Route | Key Operations |
 |---|---|---|
 | Auth | `/api/auth` | `GET /me`, `POST /logout` |
-| Organizations | `/api/organizations` | CRUD, member management, role assignment |
+| Organizations | `/api/organizations` | CRUD, member management, role assignment. Inviting a member NEVER adds them directly — always creates a pending invite (`status="invited"`; 409 `ALREADY_MEMBER` for active members) that the invitee must accept |
+| Invites | `/api/invites` | `POST /accept`, `POST /decline` (JWT, **no X-Org-Id** — exempt from org middleware since the caller isn't a member yet). Accept validates the logged-in email matches the invited email, then creates/reactivates the membership |
 | Tenders | `/api/tenders` | List/filter, `GET /paged` (paginated wrapper over BiddingBuddyServices), get detail, save, track, documents, AI analysis |
 | Bids | `/api/bids` | List, create, update, stage progression (7 stages), activities, **comments**, checklist, `GET /by-tender?tenderIds=` (batched already-in-pipeline lookup for tender list/detail) |
 | Compliance | `/api/compliance` | Requirements, documents, health score |
@@ -137,7 +139,7 @@ Frontend /auth/callback?access_token=...&refresh_token=...
 - Issues new access JWT + new refresh token
 
 ### Org context middleware
-Applied to all routes except `/api/auth/*`, `/internal/*`, `/swagger`, `/health`:
+Applied to all routes except `/api/auth/*`, `/api/public/*`, `/api/invites/*`, `/internal/*`, `/swagger`, `/health`, `/sitemap`:
 1. Reads `X-Org-Id` header → validates UUID
 2. Extracts `sub` claim from JWT
 3. Checks `organization_members` table — 403 if not a member
@@ -193,7 +195,8 @@ the backing table + entity (`UserNotification`) were renamed.
   },
   "OAuth": {
     "Google": { "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/google/callback" },
-    "GitHub": { "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/github/callback" }
+    "GitHub": { "Enabled": true, "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/github/callback" },
+    "Facebook": { "Enabled": true, "ClientId": "...", "ClientSecret": "...", "RedirectUri": "https://localhost:7100/api/auth/oauth/facebook/callback" }
   },
   "Frontend": { "BaseUrl": "http://localhost:3000", "AuthCallbackPath": "/auth/callback" },
   "Pipeline": { "ApiKey": "pipeline_internal_secret_CHANGE_ME" },
@@ -457,7 +460,7 @@ public class AuthService(INotificationPublisher publisher, ...)
 | Password signup start (`POST /api/auth/register`) | `AuthService.StartRegistrationAsync` | `EMAIL_VERIFICATION` (6-digit OTP) | Email |
 | Email verified (`POST /api/auth/verify-email`) → account created | `AuthService.VerifyEmailAsync` → `CreateVerifiedAccountAsync` | `WELCOME` | Email + InApp |
 | First-time OAuth signup | `AuthService.HandleOAuthCallbackAsync` (only when `isNewUser`) | `WELCOME` | Email + InApp |
-| Org member invite | `OrganizationService.InviteMemberAsync` | `TEAM_INVITATION` | Email + InApp |
+| Org member invite | `OrganizationService.InviteMemberAsync` | `TEAM_INVITATION` | Email + InApp (existing users: link to SPA `/invites/accept?token=` — membership only on explicit accept; unregistered: registration link, Email only) |
 | Forgot password (`POST /api/auth/forgot-password`) | `AuthService.RequestPasswordResetAsync` | `PASSWORD_RESET` (6-digit OTP) | Email |
 
 **Verify-first signup:** password signup no longer creates the account directly.

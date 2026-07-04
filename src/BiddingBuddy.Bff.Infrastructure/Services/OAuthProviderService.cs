@@ -16,6 +16,7 @@ public class OAuthProviderService(IHttpClientFactory httpClientFactory, IConfigu
         {
             "google" => BuildGoogleUrl(state),
             "github" => BuildGitHubUrl(state),
+            "facebook" => BuildFacebookUrl(state),
             _ => throw new NotSupportedException($"OAuth provider '{provider}' is not supported.")
         };
     }
@@ -26,6 +27,7 @@ public class OAuthProviderService(IHttpClientFactory httpClientFactory, IConfigu
         {
             "google" => ExchangeGoogleAsync(code, ct),
             "github" => ExchangeGitHubAsync(code, ct),
+            "facebook" => ExchangeFacebookAsync(code, ct),
             _ => throw new NotSupportedException($"OAuth provider '{provider}' is not supported.")
         };
     }
@@ -147,6 +149,71 @@ public class OAuthProviderService(IHttpClientFactory httpClientFactory, IConfigu
             AccessToken: accessToken,
             ProviderRefreshToken: null,
             TokenExpiresAt: null
+        );
+    }
+
+    // ── Facebook ──────────────────────────────────────────────────────────────
+
+    private string BuildFacebookUrl(string state)
+    {
+        var clientId = config["OAuth:Facebook:ClientId"]!;
+        var redirectUri = config["OAuth:Facebook:RedirectUri"]!;
+        var encodedState = Uri.EscapeDataString(state);
+        return $"https://www.facebook.com/v19.0/dialog/oauth" +
+               $"?client_id={clientId}" +
+               $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
+               $"&response_type=code" +
+               $"&scope={Uri.EscapeDataString("email,public_profile")}" +
+               $"&state={encodedState}";
+    }
+
+    private async Task<OAuthUserInfo> ExchangeFacebookAsync(string code, CancellationToken ct)
+    {
+        var http = httpClientFactory.CreateClient();
+
+        // Facebook exchanges the code via GET with query params (not a form POST)
+        var tokenUrl = $"https://graph.facebook.com/v19.0/oauth/access_token" +
+                       $"?client_id={config["OAuth:Facebook:ClientId"]}" +
+                       $"&client_secret={config["OAuth:Facebook:ClientSecret"]}" +
+                       $"&redirect_uri={Uri.EscapeDataString(config["OAuth:Facebook:RedirectUri"]!)}" +
+                       $"&code={Uri.EscapeDataString(code)}";
+        var tokenResp = await http.GetAsync(tokenUrl, ct);
+        tokenResp.EnsureSuccessStatusCode();
+        var tokenJson = await tokenResp.Content.ReadAsStringAsync(ct);
+        var tokenData = JsonSerializer.Deserialize<JsonElement>(tokenJson, JsonOpts);
+        var accessToken = tokenData.GetProperty("access_token").GetString()!;
+        var expiresIn = tokenData.TryGetProperty("expires_in", out var ei) ? ei.GetInt32() : 3600;
+
+        // Fetch user profile. Phone-only Facebook accounts have no email — the field
+        // is absent from the response even when the email scope was granted.
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var profileResp = await http.GetAsync(
+            "https://graph.facebook.com/v19.0/me?fields=id,name,email,picture.width(200)", ct);
+        profileResp.EnsureSuccessStatusCode();
+        var profileJson = await profileResp.Content.ReadAsStringAsync(ct);
+        var profile = JsonSerializer.Deserialize<JsonElement>(profileJson, JsonOpts);
+
+        var email = profile.TryGetProperty("email", out var em) && em.ValueKind == JsonValueKind.String
+            ? em.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(email))
+            throw new InvalidOperationException(
+                "Your Facebook account has no email address. Please sign in with Google or email instead.");
+
+        string? avatar = null;
+        if (profile.TryGetProperty("picture", out var pic) &&
+            pic.TryGetProperty("data", out var picData) &&
+            picData.TryGetProperty("url", out var picUrl))
+            avatar = picUrl.GetString();
+
+        return new OAuthUserInfo(
+            ProviderUserId: profile.GetProperty("id").GetString()!,
+            Email: email!,
+            Name: profile.TryGetProperty("name", out var nm) ? nm.GetString()! : "Unknown",
+            AvatarUrl: avatar,
+            AccessToken: accessToken,
+            ProviderRefreshToken: null,   // Facebook issues no refresh token for this flow
+            TokenExpiresAt: DateTime.UtcNow.AddSeconds(expiresIn)
         );
     }
 

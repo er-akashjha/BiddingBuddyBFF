@@ -1,10 +1,11 @@
 namespace BiddingBuddy.Bff.Core.Entities;
 
 /// <summary>
-/// A pending invite for an email that does not yet have a <see cref="User"/> row.
-/// The recipient receives a registration link with a single-use token; on register,
-/// the token is validated and a fresh user + <see cref="OrgMember"/> in the inviting
-/// org are created. Maps to <c>organization_invites</c>.
+/// A pending invite — membership is never granted until the invitee confirms.
+/// Existing users receive a link to the SPA accept page (consumed via
+/// <c>POST /api/invites/accept</c>); unregistered emails receive a registration
+/// link (consumed at register/verify time, creating the user + membership together).
+/// Maps to <c>organization_invites</c>.
 /// </summary>
 public class OrganizationInvite
 {

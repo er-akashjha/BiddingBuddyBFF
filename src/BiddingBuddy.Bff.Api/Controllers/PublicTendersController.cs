@@ -40,6 +40,30 @@ public class PublicTendersController(IBiddingBuddyServicesClient servicesClient)
     }
 
     /// <summary>
+    /// Distinct category/state filter values for the public explore page — the same
+    /// data-driven facet list the logged-in tender search uses (canonical taxonomy
+    /// values only, so guest filters stay consistent with the corpus).
+    /// </summary>
+    [HttpGet("facet-options")]
+    [ProducesResponseType(typeof(List<string>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> FacetOptions(
+        [FromQuery] string field,
+        [FromQuery] string? search,
+        [FromQuery] int limit = 0,
+        CancellationToken ct = default)
+    {
+        // Anonymous surface — validate the field here rather than letting the
+        // upstream ArgumentException surface as a 500.
+        var f = field?.Trim().ToLowerInvariant();
+        if (f is not ("category" or "state"))
+            return BadRequest(new ProblemDetails { Title = "field must be 'category' or 'state'." });
+
+        var values = await servicesClient.GetTenderFacetOptionsAsync(f, search, limit, ct);
+        return Ok(values);
+    }
+
+    /// <summary>
     /// Tender counts grouped by state — powers the landing-page coverage
     /// choropleth. Returns one entry per state that has at least one tender.
     /// </summary>

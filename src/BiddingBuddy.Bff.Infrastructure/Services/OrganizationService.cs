@@ -153,53 +153,20 @@ public class OrganizationService(
 
         var user = await userRepo.FindByEmailAsync(email, ct);
 
-        // ── Case A: invitee already has a user account → grant membership now ──
+        // An already-active member needs no invite — surface it instead of silently
+        // re-adding (the old flow would overwrite their role without their consent).
         if (user is not null)
         {
             var existing = await db.OrgMembers
                 .FirstOrDefaultAsync(m => m.OrgId == orgId && m.UserId == user.Id, ct);
-
-            if (existing is not null)
-            {
-                existing.Status     = "active";
-                existing.Role       = dto.Role;
-                existing.Department = dto.Department;
-                existing.JoinedAt   = DateTime.UtcNow;
-            }
-            else
-            {
-                existing = new OrgMember
-                {
-                    OrgId      = orgId,
-                    UserId     = user.Id,
-                    Role       = dto.Role,
-                    Department = dto.Department,
-                    Status     = "active",
-                    InvitedBy  = invitedBy,
-                    JoinedAt   = DateTime.UtcNow,
-                };
-                db.OrgMembers.Add(existing);
-            }
-
-            await db.SaveChangesAsync(ct);
-
-            existing.User = user;
-
-            // Fire TEAM_INVITATION (Email + InApp) with a deep-link to the org page —
-            // they're already a user, so no registration step needed.
-            var deepLink = BuildDeepLink(orgId);
-            await SendInvitationAsync(invitedBy, user.Id, user.Email, user.Name, orgId, deepLink, ct);
-
-            var stats = await ComputeMemberStatsAsync(orgId, ct);
-
-            return new InviteMemberResultDto(
-                Status:       "added",
-                Member:       MapMember(existing, stats.GetValueOrDefault(existing.UserId)),
-                InvitedEmail: null,
-                ExpiresAt:    null);
+            if (existing is not null && existing.Status == "active")
+                throw new InvalidOperationException("ALREADY_MEMBER");
         }
 
-        // ── Case B: no user with this email → create a pending invite ──────────
+        // Membership is never granted at invite time. Both cases below create a
+        // pending invite; the invitee becomes a member only when they explicitly
+        // confirm — existing users via the SPA accept page (POST /api/invites/accept),
+        // new users by registering with the token.
 
         // Cancel any prior pending invite for this email/org by accepting it as expired —
         // simpler than DELETE and preserves history. The partial UNIQUE index on
@@ -228,18 +195,163 @@ public class OrganizationService(
         db.OrganizationInvites.Add(invite);
         await db.SaveChangesAsync(ct);
 
-        // Email a registration link carrying the raw token. The recipient registers
-        // via POST /api/auth/register with this token in the body; AuthService
-        // validates + consumes the invite and joins them to this org.
-        var registerLink = BuildRegisterLink(rawToken, email);
-        await SendInvitationAsync(invitedBy, recipientUserId: null, email, recipientName: null,
-                                  orgId, registerLink, ct);
+        if (user is not null)
+        {
+            // Existing user → email + in-app link to the SPA accept page, where they
+            // confirm (or decline) joining this org.
+            var acceptLink = BuildAcceptLink(rawToken);
+            await SendInvitationAsync(invitedBy, user.Id, user.Email, user.Name, orgId, acceptLink, ct);
+        }
+        else
+        {
+            // No account yet → email a registration link carrying the raw token. The
+            // recipient registers via POST /api/auth/register with this token in the
+            // body; AuthService validates + consumes the invite and joins them to this org.
+            var registerLink = BuildRegisterLink(rawToken, email);
+            await SendInvitationAsync(invitedBy, recipientUserId: null, email, recipientName: null,
+                                      orgId, registerLink, ct);
+        }
 
         return new InviteMemberResultDto(
             Status:       "invited",
             Member:       null,
             InvitedEmail: email,
             ExpiresAt:    expiresAt);
+    }
+
+    public async Task<InvitePreviewDto> GetInvitePreviewAsync(string token, CancellationToken ct = default)
+    {
+        var invite = await FindPendingInviteByTokenAsync(token, ct);
+
+        var org = await db.Organizations
+            .Where(o => o.Id == invite.OrgId)
+            .Select(o => new { o.Name, o.LogoUrl })
+            .FirstOrDefaultAsync(ct)
+            ?? throw new InvalidOperationException("INVITE_INVALID");
+
+        var inviterName = await db.Users
+            .Where(u => u.Id == invite.InvitedBy)
+            .Select(u => u.Name)
+            .FirstOrDefaultAsync(ct) ?? string.Empty;
+
+        var inviteeHasAccount = await userRepo.FindByEmailAsync(invite.Email, ct) is not null;
+
+        return new InvitePreviewDto(
+            org.Name, org.LogoUrl, inviterName,
+            invite.Role, invite.Email, invite.ExpiresAt, inviteeHasAccount);
+    }
+
+    public async Task<AcceptInviteResultDto> AcceptInviteAsync(Guid userId, string token, CancellationToken ct = default)
+    {
+        var invite = await FindPendingInviteByTokenAsync(token, ct);
+        await RequireInviteeMatchAsync(invite, userId, ct);
+        return await AcceptPendingInviteAsync(invite, userId, ct);
+    }
+
+    public async Task<IReadOnlyList<MyInviteDto>> GetMyPendingInvitesAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await userRepo.FindByIdAsync(userId, ct)
+            ?? throw new KeyNotFoundException("User not found.");
+        var email = user.Email.Trim().ToLowerInvariant();
+
+        var now = DateTime.UtcNow;
+        return await (
+            from i in db.OrganizationInvites
+            where i.Email.ToLower() == email && i.AcceptedAt == null && i.ExpiresAt > now
+            join o in db.Organizations on i.OrgId equals o.Id
+            join u in db.Users on i.InvitedBy equals u.Id into inviters
+            from u in inviters.DefaultIfEmpty()
+            orderby i.CreatedAt descending
+            select new MyInviteDto(i.Id, o.Name, o.LogoUrl, u != null ? u.Name : string.Empty, i.Role, i.ExpiresAt)
+        ).ToListAsync(ct);
+    }
+
+    public async Task<AcceptInviteResultDto> AcceptInviteByIdAsync(Guid userId, Guid inviteId, CancellationToken ct = default)
+    {
+        var invite = await db.OrganizationInvites.FirstOrDefaultAsync(i => i.Id == inviteId, ct);
+        if (invite is null || invite.AcceptedAt is not null || invite.ExpiresAt < DateTime.UtcNow)
+            throw new InvalidOperationException("INVITE_INVALID");
+
+        await RequireInviteeMatchAsync(invite, userId, ct);
+        return await AcceptPendingInviteAsync(invite, userId, ct);
+    }
+
+    /// <summary>Shared accept body: create/reactivate the membership and consume the invite.
+    /// Callers have already resolved a live invite and verified the invitee email matches.</summary>
+    private async Task<AcceptInviteResultDto> AcceptPendingInviteAsync(OrganizationInvite invite, Guid userId, CancellationToken ct)
+    {
+        var member = await db.OrgMembers
+            .FirstOrDefaultAsync(m => m.OrgId == invite.OrgId && m.UserId == userId, ct);
+
+        if (member is null)
+        {
+            db.OrgMembers.Add(new OrgMember
+            {
+                OrgId      = invite.OrgId,
+                UserId     = userId,
+                Role       = invite.Role,
+                Department = invite.Department,
+                Status     = "active",
+                InvitedBy  = invite.InvitedBy,
+                JoinedAt   = DateTime.UtcNow,
+                CreatedAt  = DateTime.UtcNow,
+            });
+        }
+        else
+        {
+            // e.g. a previously suspended member re-invited — reactivate with the invite's role.
+            member.Status     = "active";
+            member.Role       = invite.Role;
+            member.Department = invite.Department;
+            member.JoinedAt   = DateTime.UtcNow;
+        }
+
+        invite.AcceptedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        var orgName = await db.Organizations
+            .Where(o => o.Id == invite.OrgId)
+            .Select(o => o.Name)
+            .FirstAsync(ct);
+
+        return new AcceptInviteResultDto(invite.OrgId, orgName, invite.Role);
+    }
+
+    public async Task DeclineInviteAsync(Guid userId, string token, CancellationToken ct = default)
+    {
+        var invite = await FindPendingInviteByTokenAsync(token, ct);
+        await RequireInviteeMatchAsync(invite, userId, ct);
+
+        // The schema has no separate declined state — consuming the token (accepted_at)
+        // is what matters: it can't be redeemed and drops off the org's pending list.
+        invite.AcceptedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Token → live invite row, or <c>INVITE_INVALID</c> for unknown/consumed/expired.</summary>
+    private async Task<OrganizationInvite> FindPendingInviteByTokenAsync(string token, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("INVITE_INVALID");
+
+        var hash = HashRawToken(token);
+        var invite = await db.OrganizationInvites
+            .FirstOrDefaultAsync(i => i.TokenHash == hash, ct);
+
+        if (invite is null || invite.AcceptedAt is not null || invite.ExpiresAt < DateTime.UtcNow)
+            throw new InvalidOperationException("INVITE_INVALID");
+
+        return invite;
+    }
+
+    /// <summary>The token alone isn't enough to join — the logged-in caller must own the
+    /// invited email, otherwise a forwarded link would let anyone into the org.</summary>
+    private async Task RequireInviteeMatchAsync(OrganizationInvite invite, Guid userId, CancellationToken ct)
+    {
+        var user = await userRepo.FindByIdAsync(userId, ct)
+            ?? throw new KeyNotFoundException("User not found.");
+        if (!string.Equals(user.Email, invite.Email, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("INVITE_EMAIL_MISMATCH");
     }
 
     public async Task<OrgMemberDto> UpdateMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, UpdateMemberDto dto, CancellationToken ct = default)
@@ -516,10 +628,12 @@ public class OrganizationService(
         }
     }
 
-    private string BuildDeepLink(Guid orgId)
+    /// <summary>Link for invitees who already have an account — the SPA's accept page,
+    /// where they sign in (if needed) and explicitly confirm or decline joining.</summary>
+    private string BuildAcceptLink(string rawToken)
     {
         var frontendBase = (config["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
-        return $"{frontendBase}/orgs/{orgId}";
+        return $"{frontendBase}/invites/accept?token={Uri.EscapeDataString(rawToken)}";
     }
 
     private string BuildRegisterLink(string rawToken, string email)
@@ -548,9 +662,13 @@ public class OrganizationService(
         var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         var raw = Convert.ToBase64String(bytes)
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');   // url-safe
+        return (raw, HashRawToken(raw));
+    }
+
+    private static string HashRawToken(string raw)
+    {
         var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
-        var hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-        return (raw, hash);
+        return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 
     private static string FirstName(string? fullName)
