@@ -40,3 +40,6 @@ appsettings.*.json
 # EF Core migrations (generated on deploy)
 # Uncomment if you want to exclude migrations:
 # **/Migrations/
+
+# BFF runtime logs (Serilog file sink)
+src/BiddingBuddy.Bff.Api/logs/

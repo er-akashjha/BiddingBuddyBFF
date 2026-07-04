@@ -1,10 +1,18 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v5**
+Current version: **v6**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v6 — 2026-07-04 10:50 IST
+
+### Public facet-options endpoint (guest explore filters)
+- New `GET /api/public/tenders/facet-options?field=category|state&search=&limit=` on `PublicTendersController` — anonymous, IP rate-limited ("public" policy) like its siblings; pure passthrough to BiddingBuddyServices' facet values (canonical taxonomy). Invalid `field` returns 400 instead of surfacing the upstream exception as a 500.
+- Powers bidding-buddy-ui v7's data-driven guest explore filters, replacing hardcoded lists that no longer matched the canonical taxonomy.
+
+Files: `src/BiddingBuddy.Bff.Api/Controllers/PublicTendersController.cs`.
 
 ## v5 — 2026-07-04 02:20 IST
 
