@@ -10,7 +10,7 @@ Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry a
 
 **Per-user saved tender filters (migration 0018).**
 
-- **Migration `0018_add_user_saved_filters.sql`:** new `user_saved_filters` table — per (user, org). Two kinds: `last_used` (one auto-upserted snapshot per user+org, enforced by a partial unique index) and `named` (explicit saved views). The filter selection is stored as `jsonb` so its shape can evolve without a migration. Apply via `POST /internal/migrations` right after deploying this image.
+- **Migration `0018_add_user_saved_filters.sql`:** new `user_saved_filters` table — per (user, org). Two kinds: `last_used` (one auto-upserted snapshot per user+org, enforced by a partial unique index) and `named` (explicit saved views). The filter selection is stored as `jsonb` (serialized via an EF `ValueConverter` to a JSON string — matching the codebase's jsonb-as-string convention; the DbContext uses `UseNpgsql` without `EnableDynamicJson`, so a raw POCO→jsonb mapping throws on write). Apply via `POST /internal/migrations` right after deploying this image.
 - **New endpoints — `/api/saved-filters` (org-scoped, JWT + X-Org-Id):**
   - `GET` → `{ lastUsed, named[] }`
   - `PUT /last-used` → upsert the last-used snapshot
