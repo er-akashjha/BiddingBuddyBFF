@@ -1,10 +1,23 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v6**
+Current version: **v7**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v7 — 2026-07-06 11:30 IST
+
+**Per-user saved tender filters (migration 0018).**
+
+- **Migration `0018_add_user_saved_filters.sql`:** new `user_saved_filters` table — per (user, org). Two kinds: `last_used` (one auto-upserted snapshot per user+org, enforced by a partial unique index) and `named` (explicit saved views). The filter selection is stored as `jsonb` so its shape can evolve without a migration. Apply via `POST /internal/migrations` right after deploying this image.
+- **New endpoints — `/api/saved-filters` (org-scoped, JWT + X-Org-Id):**
+  - `GET` → `{ lastUsed, named[] }`
+  - `PUT /last-used` → upsert the last-used snapshot
+  - `POST` → create a named view (capped at 50/user)
+  - `DELETE /{id}` → remove a saved filter
+- **Entity/plumbing:** `UserSavedFilter` + `SavedFilterState` (Core), `UserSavedFilterConfiguration` (jsonb mapping), `BffDbContext.UserSavedFilters`, `ISavedFilterService`/`SavedFilterService`, `SavedFiltersController`, DI registration. Errors surface via the existing `GlobalExceptionHandler` (400/404).
+- Backs the bidding-buddy-ui Tenders "Views" menu + auto-restore of last-used filters.
 
 ## v6 — 2026-07-04 10:50 IST
 

@@ -23,6 +23,9 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();
     public DbSet<OrgTenderSettings> OrgTenderSettings => Set<OrgTenderSettings>();
 
+    // Per-user saved tender filters (auto last-used snapshot + named views)
+    public DbSet<UserSavedFilter> UserSavedFilters => Set<UserSavedFilter>();
+
     // Tender-match digests (interests → buffered matches → grouped notification)
     public DbSet<TenderAlertRule> TenderAlertRules => Set<TenderAlertRule>();
     public DbSet<OrgAlertSettings> OrgAlertSettings => Set<OrgAlertSettings>();
