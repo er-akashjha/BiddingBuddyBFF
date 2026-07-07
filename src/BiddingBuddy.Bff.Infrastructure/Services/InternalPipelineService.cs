@@ -27,13 +27,19 @@ public class InternalPipelineService(
 
     public async Task<UpsertTenderResponseDto> UpsertTenderAsync(UpsertTenderDto dto, CancellationToken ct = default)
     {
+        // Identity is (platform, gem_tender_id) since migration 0022. Older pipelines
+        // omit Platform → "gem" (also matches every pre-0021 row via the column default).
+        // Case-insensitive to prevent "GeM"/"gem" from creating duplicate rows.
+        var platform = string.IsNullOrWhiteSpace(dto.Platform) ? "gem" : dto.Platform.Trim().ToLowerInvariant();
+
         var existing = await db.Tenders
-            .FirstOrDefaultAsync(t => t.GemTenderId == dto.GemTenderId, ct);
+            .FirstOrDefaultAsync(t => t.Platform == platform && t.GemTenderId == dto.GemTenderId, ct);
 
         if (existing is null)
         {
             var tender = new Tender
             {
+                Platform         = platform,
                 GemTenderId      = dto.GemTenderId,
                 MongoTenderId    = dto.MongoTenderId,
                 Title            = dto.Title,
@@ -58,7 +64,6 @@ public class InternalPipelineService(
                 AiSummary        = dto.AiSummary,
                 AiTags           = dto.AiTags,
                 RawData          = dto.RawData,
-                Platform         = string.IsNullOrWhiteSpace(dto.Platform) ? "gem" : dto.Platform,
             };
             db.Tenders.Add(tender);
             await db.SaveChangesAsync(ct);
@@ -93,8 +98,9 @@ public class InternalPipelineService(
         existing.RiskScore        = dto.RiskScore ?? existing.RiskScore;
         existing.AiSummary        = dto.AiSummary ?? existing.AiSummary;
         existing.AiTags           = dto.AiTags ?? existing.AiTags;
-        // Keep a populated platform; only overwrite when a non-blank value arrives.
-        if (!string.IsNullOrWhiteSpace(dto.Platform)) existing.Platform = dto.Platform;
+        // Platform is part of the identity — the lookup above matched on it, so any
+        // dto.Platform we could assign here would either be a no-op or a case-only
+        // diff (both rows normalized to lowercase). Nothing to do.
         if (dto.RawData is not null) existing.RawData = dto.RawData;
 
         await db.SaveChangesAsync(ct);

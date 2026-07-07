@@ -365,6 +365,9 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (q.States is not null)
             foreach (var s in q.States)
                 if (!string.IsNullOrWhiteSpace(s)) qs.Add("States", s);
+        if (q.Platforms is not null)
+            foreach (var p in q.Platforms)
+                if (!string.IsNullOrWhiteSpace(p)) qs.Add("Platforms", p);
         if (!string.IsNullOrWhiteSpace(q.Tag))                qs["Tag"]                = q.Tag;
         if (!string.IsNullOrWhiteSpace(q.Organization))       qs["Organization"]       = q.Organization;
         if (!string.IsNullOrWhiteSpace(q.Ministry))           qs["Ministry"]           = q.Ministry;

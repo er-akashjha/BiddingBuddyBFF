@@ -1,10 +1,19 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v12**
+Current version: **v13**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v13 — 2026-07-08 IST
+
+**Multi-portal tender identity — code follow-up to v12.**
+
+- **`InternalPipelineService.UpsertTenderAsync` now keys the lookup on `(platform, gem_tender_id)`** — matches the composite uniqueness added by migration `0022`. Platform is normalized to lowercase on entry (older pipelines that send `"GeM"` no longer create duplicate rows). The update-path `Platform` overwrite was removed (identity is fixed once matched).
+- **`TenderSearchQueryDto.Platforms`** — new multi-select portal filter parameter. `BiddingBuddyServicesClient.BuildSearchUrl` forwards each value as a `Platforms` query param to BiddingBuddyServices. UI can now do `?platforms=gem&platforms=eprocure` to filter by source portal.
+- **Tests: `InternalUpsertPlatformTests`** (EF InMemory) — pins the write-path behaviour: default-to-gem, cross-portal no-clobber (same `gem_tender_id`, different `Platform` → 2 rows), case-insensitive same-portal upsert. Adds `Microsoft.EntityFrameworkCore.InMemory` to the test project.
+- **Go-live:** ship this image before applying migration 0022. Without this code, migration 0022's composite index turns cross-portal collisions from silent misassignment into `unique_violation` errors on write.
 
 ## v12 — 2026-07-07 IST
 
