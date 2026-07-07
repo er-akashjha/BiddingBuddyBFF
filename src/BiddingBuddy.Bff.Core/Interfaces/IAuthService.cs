@@ -24,7 +24,19 @@ public interface IAuthService
     Task ResetPasswordAsync(ResetPasswordDto dto, CancellationToken ct = default);
     Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default);
     Task<TokenResponseDto> HandleOAuthCallbackAsync(string provider, string code, CancellationToken ct = default);
+    /// <summary>
+    /// Mobile OAuth completion: resolve/create the user exactly like the web callback,
+    /// but mint a 60-second single-use exchange code (pinning the app's PKCE challenge)
+    /// instead of issuing tokens — tokens must never ride a redirect URL.
+    /// </summary>
+    Task<MobileOAuthCodeDto> HandleOAuthCallbackForMobileAsync(string provider, string code, string codeChallenge, CancellationToken ct = default);
+    /// <summary>Redeem a one-time mobile OAuth code + PKCE verifier for a normal token pair.</summary>
+    Task<TokenResponseDto> ExchangeOAuthCodeAsync(string code, string codeVerifier, CancellationToken ct = default);
     Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default);
+    /// <summary>Native Sign in with Apple: verify the identity token, link/create the user, return tokens.</summary>
+    Task<TokenResponseDto> SignInWithAppleAsync(AppleSignInDto dto, CancellationToken ct = default);
+    /// <summary>Self-service account deletion: re-auth, anonymize + deactivate, revoke all sessions/devices.</summary>
+    Task DeleteAccountAsync(Guid userId, DeleteAccountDto dto, CancellationToken ct = default);
     Task LogoutAsync(string refreshToken, CancellationToken ct = default);
     Task<UserDto> GetCurrentUserAsync(Guid userId, CancellationToken ct = default);
     Task<UserDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto, CancellationToken ct = default);

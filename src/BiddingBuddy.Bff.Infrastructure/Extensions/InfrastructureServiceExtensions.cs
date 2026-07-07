@@ -82,11 +82,14 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<TokenService>();
         services.AddScoped<ITokenService>(sp => sp.GetRequiredService<TokenService>());
         services.AddScoped<IOAuthProviderService, OAuthProviderService>();
+        // Singleton so the Apple JWKS cache is shared across requests.
+        services.AddSingleton<IAppleTokenVerifier, AppleTokenVerifier>();
         services.AddScoped<IAuthService, AuthService>();
 
         // Domain services
         services.AddScoped<IOrganizationService, OrganizationService>();
         services.AddScoped<ITenderService, TenderService>();
+        services.AddScoped<ISavedFilterService, SavedFilterService>();
         services.AddScoped<IBidService, BidService>();
         services.AddScoped<IBidAttachmentService, BidAttachmentService>();
         services.AddScoped<IComplianceService, ComplianceService>();
@@ -96,6 +99,7 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<ICompetitorService, CompetitorService>();
         services.AddScoped<IAnalysisService, AnalysisService>();
         services.AddScoped<INotificationService, NotificationService>();
+        services.AddScoped<IDeviceService, DeviceService>();
         services.AddScoped<IGemIntegrationService, GemIntegrationService>();
         services.AddScoped<ITenderAlertRuleService, TenderAlertRuleService>();
         services.AddScoped<IMatchingService, MatchingService>();

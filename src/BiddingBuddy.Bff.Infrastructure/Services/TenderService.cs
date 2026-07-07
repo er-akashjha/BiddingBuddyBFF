@@ -71,7 +71,7 @@ public class TenderService(BffDbContext db) : ITenderService
                 t.BuyerOrgName, t.State, t.Category,
                 t.TenderValue, t.EmdAmount, t.PublishedDate, t.ClosingDate,
                 t.Status, t.AiScore, t.WinProbability,
-                s?.IsTracked ?? false, s?.IsSaved ?? false);
+                s?.IsTracked ?? false, s?.IsSaved ?? false, t.Platform);
         }).ToList();
 
         return new PagedResult<TenderListItemDto>(items, total, page, size);
@@ -183,7 +183,8 @@ public class TenderService(BffDbContext db) : ITenderService
         BuyerName:        null,
         BuyerDesignation: null,
         SourceDocuments:  Array.Empty<TenderSourceDocumentDto>(),
-        Timeline:         null);
+        Timeline:         null,
+        Platform:         t.Platform);
 
     private static OrgTenderSettingsDto MapSettings(OrgTenderSettings s)
         => new(s.IsTracked, s.IsSaved, s.CustomScore, s.Notes, s.Tags);

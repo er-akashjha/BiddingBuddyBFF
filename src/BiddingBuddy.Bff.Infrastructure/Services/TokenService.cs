@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using BiddingBuddy.Bff.Core.DTOs.Auth;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -48,16 +49,20 @@ public class TokenService(IConfiguration config) : ITokenService
         return (token, hash);
     }
 
-    public string GenerateStateToken(string returnUrl)
+    public string GenerateStateToken(OAuthStateData data)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
-            new Claim("return_url", returnUrl),
-            new Claim("nonce", Guid.NewGuid().ToString()),
+            new("return_url", data.ReturnUrl),
+            new("nonce", Guid.NewGuid().ToString()),
         };
+        // Mobile-only claims — absent for web flows, so the callback can tell them apart.
+        if (data.Client is not null) claims.Add(new Claim("client", data.Client));
+        if (data.CodeChallenge is not null) claims.Add(new Claim("code_challenge", data.CodeChallenge));
+        if (data.RedirectUri is not null) claims.Add(new Claim("redirect_uri", data.RedirectUri));
 
         var token = new JwtSecurityToken(
             issuer: _issuer,
@@ -69,9 +74,9 @@ public class TokenService(IConfiguration config) : ITokenService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    public bool TryValidateStateToken(string state, out string returnUrl)
+    public bool TryValidateStateToken(string state, out OAuthStateData data)
     {
-        returnUrl = "/";
+        data = new OAuthStateData("/");
         try
         {
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
@@ -87,7 +92,11 @@ public class TokenService(IConfiguration config) : ITokenService
                 ClockSkew = TimeSpan.Zero,
             }, out _);
 
-            returnUrl = principal.FindFirst("return_url")?.Value ?? "/";
+            data = new OAuthStateData(
+                principal.FindFirst("return_url")?.Value ?? "/",
+                principal.FindFirst("client")?.Value,
+                principal.FindFirst("code_challenge")?.Value,
+                principal.FindFirst("redirect_uri")?.Value);
             return true;
         }
         catch

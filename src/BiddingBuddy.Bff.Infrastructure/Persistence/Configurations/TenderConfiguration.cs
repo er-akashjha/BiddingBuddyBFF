@@ -36,6 +36,7 @@ public class TenderConfiguration : IEntityTypeConfiguration<Tender>
         b.Property(x => x.AiTags).HasColumnName("ai_tags").HasColumnType("text[]");
         b.Property(x => x.RawData).HasColumnName("raw_data").HasColumnType("jsonb");
         b.Property(x => x.Source).HasColumnName("source").HasDefaultValue("gem_pipeline");
+        b.Property(x => x.Platform).HasColumnName("platform");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.AlertsScannedAt).HasColumnName("alerts_scanned_at");

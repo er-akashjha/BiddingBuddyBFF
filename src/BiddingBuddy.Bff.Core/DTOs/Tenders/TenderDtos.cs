@@ -15,7 +15,9 @@ public record TenderListItemDto(
     int? AiScore,
     decimal? WinProbability,
     bool IsTracked,
-    bool IsSaved
+    bool IsSaved,
+    // Source portal ("gem" | "eprocure" | "ireps" | …) — provenance for the UI source badge/filter.
+    string? Platform = null
 );
 
 public record TenderDetailDto(
@@ -66,7 +68,9 @@ public record TenderDetailDto(
     // ── Direct link to the tender on its source portal (e.g. the eprocure/GePNIC detail page) ──
     string? SourceUrl = null,
     // ── Technical specifications extracted from the tender PDF (authoritative, not AI-guessed) ──
-    IReadOnlyList<TenderTechSpecDto>? TechnicalSpecifications = null
+    IReadOnlyList<TenderTechSpecDto>? TechnicalSpecifications = null,
+    // ── Source portal ("gem" | "eprocure" | "ireps" | …) — provenance for the UI source badge ──
+    string? Platform = null
 );
 
 /// <summary>

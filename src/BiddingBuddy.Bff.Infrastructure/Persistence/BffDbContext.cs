@@ -12,6 +12,8 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<PendingRegistration> PendingRegistrations => Set<PendingRegistration>();
     public DbSet<PasswordResetCode> PasswordResetCodes => Set<PasswordResetCode>();
+    public DbSet<OAuthExchangeCode> OAuthExchangeCodes => Set<OAuthExchangeCode>();
+    public DbSet<UserDevice> UserDevices => Set<UserDevice>();
 
     // Orgs
     public DbSet<Organization> Organizations => Set<Organization>();
@@ -22,6 +24,9 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<Tender> Tenders => Set<Tender>();
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();
     public DbSet<OrgTenderSettings> OrgTenderSettings => Set<OrgTenderSettings>();
+
+    // Per-user saved tender filters (auto last-used snapshot + named views)
+    public DbSet<UserSavedFilter> UserSavedFilters => Set<UserSavedFilter>();
 
     // Tender-match digests (interests → buffered matches → grouped notification)
     public DbSet<TenderAlertRule> TenderAlertRules => Set<TenderAlertRule>();
