@@ -1,10 +1,18 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v11**
+Current version: **v12**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v12 — 2026-07-07 IST
+
+**Multi-portal tender identity — composite uniqueness (migration 0022).**
+
+- Migration `0022_tender_platform_uniqueness.sql` extends v10's `0021` (which added the `tenders.platform` column + index) with the identity fix: **drops** the single-column `tenders_gem_tender_id_key` and **replaces** it with a composite `ux_tenders_platform_tender_id ON (platform, gem_tender_id)`. Without this, two portals emitting the same `gem_tender_id` would silently overwrite each other's rows on upsert. The column name `gem_tender_id` stays — it now means "platform tender id"; renaming would ripple through bids/orders joins for zero behavioural gain.
+- No code changes in this release; ingestion continues to use the existing key. A follow-up will move `InternalPipelineService`'s upsert to key on `(platform, gem_tender_id)` explicitly and add a `Platforms` filter param to search — separated so this migration can ship independently.
+- **Go-live:** apply migration 0022 (`POST /internal/migrations`) right after deploy.
 
 ## v11 — 2026-07-04 19:27 IST
 
