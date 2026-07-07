@@ -195,6 +195,7 @@ CREATE TABLE tenders (
   ai_tags             TEXT[],
   raw_data            JSONB,
   source              TEXT NOT NULL DEFAULT 'gem_pipeline',
+  platform            TEXT DEFAULT 'gem',   -- per-tender source portal (gem|eprocure|ireps|…); migration 0021
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -777,3 +778,47 @@ CREATE TABLE gem_integrations (
 CREATE TRIGGER trg_gem_integrations_updated_at
   BEFORE UPDATE ON gem_integrations
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────
+-- Mobile OAuth handoff (migration 0019)
+-- One-time single-use authorization codes minted by the OAuth callback for
+-- client=mobile flows; redeemed with a PKCE verifier at POST /api/auth/oauth/exchange.
+-- ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE oauth_exchange_codes (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash       TEXT NOT NULL UNIQUE,
+  code_challenge  TEXT NOT NULL,
+  is_new_user     BOOLEAN NOT NULL DEFAULT false,
+  expires_at      TIMESTAMPTZ NOT NULL,
+  used_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_oauth_exchange_codes_expires_at ON oauth_exchange_codes (expires_at);
+
+-- ─────────────────────────────────────────────────────────────────
+-- Mobile push device registry (migration 0020)
+-- One row per FCM token. Belongs to a user (follows them across orgs).
+-- push_enabled = the app's per-device switch; revoked_at set on logout or by
+-- BidProcessor when FCM reports the token unregistered. NotificationPublisher
+-- fans out one Firebase delivery to the newest active push-enabled device.
+-- Migration 0020 also seeds Firebase notification_templates (cloned from InApp).
+-- ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE user_devices (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform          TEXT NOT NULL CHECK (platform IN ('ios','android')),
+  fcm_token         TEXT NOT NULL UNIQUE,
+  app_version       TEXT,
+  push_enabled      BOOLEAN NOT NULL DEFAULT true,
+  last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at        TIMESTAMPTZ,
+  revocation_reason TEXT
+);
+
+CREATE INDEX idx_user_devices_active ON user_devices (user_id, last_seen_at DESC)
+  WHERE revoked_at IS NULL AND push_enabled = true;

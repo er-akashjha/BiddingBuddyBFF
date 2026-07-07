@@ -42,9 +42,29 @@ public class NotificationPublisher(
         NotificationChannel.InApp,
     };
 
+    /// <summary>
+    /// Template codes we push to mobile (money / deadline / assignment / outcome — the
+    /// high-signal set from docs/mobile-app/PLAN.md §6.3). Must stay in lockstep with the
+    /// Firebase templates seeded in migration 0020; a code here without a Firebase template
+    /// just produces a delivery the processor skips.
+    /// </summary>
+    private static readonly HashSet<string> PushTemplateCodes = new(StringComparer.Ordinal)
+    {
+        "BID_DUE_SOON", "BID_OVERDUE", "BID_ASSIGNED", "BID_WON", "BID_LOST",
+        "BID_TASK_DUE_SOON", "BID_TASK_OVERDUE",
+        "TENDER_MATCH", "TENDER_AMENDED", "TENDER_CLOSING_SOON", "TENDER_HIGH_FIT",
+        "COMPLIANCE_EXPIRING", "COMPLIANCE_EXPIRED",
+        "INVOICE_DUE_SOON", "INVOICE_OVERDUE",
+    };
+
     public async Task<NotificationDispatchResultDto> SendAsync(SendNotificationDto dto, CancellationToken ct = default)
     {
         Validate(dto);
+
+        // Mobile push fan-out (centralized so no call site changes): a push mirrors the
+        // in-app bell. For a push-worthy template, resolve the InApp recipient's user →
+        // their newest active push-enabled device → append one Firebase recipient.
+        var recipients = await ExpandWithPushAsync(dto, ct);
 
         var maxRetries = MaxRetriesFor(dto.Category);
         var correlationId = Guid.NewGuid();
@@ -65,7 +85,7 @@ public class NotificationPublisher(
             CreatedAt     = DateTime.UtcNow,
         };
 
-        var deliveries = dto.Recipients
+        var deliveries = recipients
             // Dedup same channel — the table has a UNIQUE (notification_id, channel) constraint.
             .GroupBy(r => r.Channel, StringComparer.Ordinal)
             .Select(g => g.First())
@@ -117,6 +137,43 @@ public class NotificationPublisher(
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the recipient list, augmented with a Firebase target when the notification
+    /// is push-worthy and its in-app recipient has a live device. Best-effort: any lookup
+    /// failure or missing device leaves the original recipients untouched (push never
+    /// blocks or fails the in-app/email delivery).
+    /// </summary>
+    private async Task<IReadOnlyList<NotificationRecipientDto>> ExpandWithPushAsync(
+        SendNotificationDto dto, CancellationToken ct)
+    {
+        if (!PushTemplateCodes.Contains(dto.TemplateCode)) return dto.Recipients;
+        if (dto.Recipients.Any(r => r.Channel == NotificationChannel.Firebase)) return dto.Recipients;
+
+        // The in-app recipient's address is the target user's id (per every call site).
+        var inApp = dto.Recipients.FirstOrDefault(r => r.Channel == NotificationChannel.InApp);
+        if (inApp is null || !Guid.TryParse(inApp.RecipientAddress, out var userId))
+            return dto.Recipients;
+
+        try
+        {
+            var token = await db.UserDevices
+                .AsNoTracking()
+                .Where(d => d.UserId == userId && d.RevokedAt == null && d.PushEnabled)
+                .OrderByDescending(d => d.LastSeenAt)
+                .Select(d => d.FcmToken)
+                .FirstOrDefaultAsync(ct);
+
+            if (string.IsNullOrWhiteSpace(token)) return dto.Recipients;
+
+            return [.. dto.Recipients, new NotificationRecipientDto(NotificationChannel.Firebase, token)];
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Push fan-out lookup failed for user {UserId}; sending without push.", userId);
+            return dto.Recipients;
+        }
+    }
 
     private static void Validate(SendNotificationDto dto)
     {

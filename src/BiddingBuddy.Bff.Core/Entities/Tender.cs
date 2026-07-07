@@ -33,6 +33,11 @@ public class Tender
     public string[]? AiTags { get; set; }
     public string? RawData { get; set; }             // JSON
     public string Source { get; set; } = "gem_pipeline";
+
+    // Source portal this tender was scraped from ("gem" | "eprocure" | "ireps" | …). Distinct
+    // from Source (a coarse pipeline tag) — this is per-tender provenance sent by the downloader
+    // via the enrichment envelope, so the UI can badge/filter by portal. Defaults to "gem".
+    public string? Platform { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

@@ -24,7 +24,10 @@ public record UpsertTenderDto(
     int? RiskScore,
     string? AiSummary,
     string[]? AiTags,
-    string? RawData
+    string? RawData,
+    // Source portal ("gem" | "eprocure" | "ireps" | …). Sent by BidProcessor from the
+    // downloader envelope's Platform; optional so pre-existing callers stay valid (defaults null → "gem").
+    string? Platform = null
 );
 
 public record UpsertTenderResponseDto(Guid TenderId, bool Created);

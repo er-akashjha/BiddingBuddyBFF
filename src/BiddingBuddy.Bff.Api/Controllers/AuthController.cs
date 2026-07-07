@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using BiddingBuddy.Bff.Core.DTOs.Auth;
 using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -13,7 +14,8 @@ public class AuthController(
     IAuthService authService,
     ITokenService tokenService,
     IOAuthProviderService oauthProvider,
-    IConfiguration config) : ControllerBase
+    IConfiguration config,
+    IWebHostEnvironment env) : ControllerBase
 {
     // Order here is the canonical display order for GET /api/auth/providers.
     private static readonly string[] SupportedProviders = ["google", "facebook", "github"];
@@ -154,20 +156,62 @@ public class AuthController(
     public IActionResult ListEnabledProviders()
         => Ok(new { providers = SupportedProviders.Where(IsProviderEnabled).ToArray() });
 
-    /// <summary>Redirect the browser to the OAuth provider consent page (Google, Facebook or GitHub).</summary>
+    /// <summary>
+    /// Redirect the browser to the OAuth provider consent page (Google, Facebook or GitHub).
+    /// Native apps additionally pass <c>client=mobile</c>, a PKCE S256 <c>code_challenge</c>
+    /// and an allowlisted <c>redirect_uri</c> — the callback then bounces a one-time code
+    /// back into the app instead of redirecting tokens to the SPA.
+    /// </summary>
     [HttpGet("oauth/{provider}")]
     [ProducesResponseType(StatusCodes.Status302Found)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-    public IActionResult InitiateOAuth(string provider, [FromQuery] string returnUrl = "/")
+    public IActionResult InitiateOAuth(
+        string provider,
+        [FromQuery] string returnUrl = "/",
+        [FromQuery] string? client = null,
+        [FromQuery(Name = "code_challenge")] string? codeChallenge = null,
+        [FromQuery(Name = "redirect_uri")] string? redirectUri = null)
     {
         provider = provider.ToLower();
         // Disabled providers are rejected here too — hiding the button isn't the gate.
         if (!SupportedProviders.Contains(provider) || !IsProviderEnabled(provider))
             return BadRequest(new { error = $"Provider '{provider}' is not supported." });
 
-        var state = tokenService.GenerateStateToken(returnUrl);
+        OAuthStateData stateData;
+        if (client == "mobile")
+        {
+            if (codeChallenge is null || !PkceChallengeRe.IsMatch(codeChallenge))
+                return BadRequest(new { error = "A valid S256 code_challenge is required for mobile sign-in." });
+            if (redirectUri is null || !IsMobileRedirectAllowed(redirectUri))
+                return BadRequest(new { error = "redirect_uri is not on the mobile allowlist." });
+            stateData = new OAuthStateData(returnUrl, "mobile", codeChallenge, redirectUri);
+        }
+        else
+        {
+            stateData = new OAuthStateData(returnUrl);
+        }
+
+        var state = tokenService.GenerateStateToken(stateData);
         var authUrl = oauthProvider.GetAuthorizationUrl(provider, state);
         return Redirect(authUrl);
+    }
+
+    // RFC 7636: base64url alphabet, 43–128 chars.
+    private static readonly Regex PkceChallengeRe = new("^[A-Za-z0-9_-]{43,128}$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// A mobile redirect must start with an allowlisted prefix (<c>OAuth:Mobile:RedirectAllowlist</c>).
+    /// Development also accepts Expo Go / dev-client redirects (exp:// exps://) so the flow is
+    /// testable without a store build.
+    /// </summary>
+    private bool IsMobileRedirectAllowed(string redirectUri)
+    {
+        var allowlist = config.GetSection("OAuth:Mobile:RedirectAllowlist").Get<string[]>()
+                        ?? ["tendersagent://auth", "biddingbuddymobile://auth"];
+        if (allowlist.Any(p => redirectUri.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return env.IsDevelopment() &&
+               (redirectUri.StartsWith("exp://") || redirectUri.StartsWith("exps://"));
     }
 
     /// <summary>OAuth callback — exchanges code for tokens and redirects to the frontend.</summary>
@@ -183,8 +227,13 @@ public class AuthController(
         if (!SupportedProviders.Contains(provider) || !IsProviderEnabled(provider))
             return BadRequest(new { error = "Unsupported provider." });
 
-        if (!tokenService.TryValidateStateToken(state, out var returnUrl))
+        if (!tokenService.TryValidateStateToken(state, out var stateData))
             return BadRequest(new { error = "Invalid or expired state token." });
+
+        // Mobile flows (client=mobile pinned in the signed state at initiation) get a
+        // one-time exchange code bounced into the app — never tokens in the URL.
+        if (stateData.Client == "mobile" && stateData.RedirectUri is not null)
+            return await CompleteMobileOAuthAsync(provider, code, stateData, ct);
 
         try
         {
@@ -199,7 +248,7 @@ public class AuthController(
                               $"&refresh_token={Uri.EscapeDataString(tokens.RefreshToken)}" +
                               $"&expires_in={tokens.ExpiresIn}" +
                               $"&is_new={(tokens.IsNewUser ? "1" : "0")}" +
-                              $"&return_url={Uri.EscapeDataString(returnUrl)}";
+                              $"&return_url={Uri.EscapeDataString(stateData.ReturnUrl)}";
 
             return Redirect(redirectUrl);
         }
@@ -207,6 +256,111 @@ public class AuthController(
         {
             var frontendBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
             return Redirect($"{frontendBase}/auth/error?message={Uri.EscapeDataString(ex.Message)}");
+        }
+    }
+
+    /// <summary>
+    /// Mobile completion: mint a 60-second single-use exchange code and bounce back into
+    /// the app via its allowlisted redirect. The app redeems the code (with its PKCE
+    /// verifier) at <c>POST /api/auth/oauth/exchange</c>.
+    /// </summary>
+    private async Task<IActionResult> CompleteMobileOAuthAsync(
+        string provider, string code, OAuthStateData state, CancellationToken ct)
+    {
+        var sep = state.RedirectUri!.Contains('?') ? '&' : '?';
+        try
+        {
+            var result = await authService.HandleOAuthCallbackForMobileAsync(
+                provider, code, state.CodeChallenge!, ct);
+            return Redirect(
+                $"{state.RedirectUri}{sep}code={Uri.EscapeDataString(result.Code)}&is_new={(result.IsNewUser ? "1" : "0")}");
+        }
+        catch (Exception ex)
+        {
+            return Redirect($"{state.RedirectUri}{sep}error={Uri.EscapeDataString(ex.Message)}");
+        }
+    }
+
+    /// <summary>Redeem a one-time mobile OAuth code + PKCE verifier for a normal token pair.</summary>
+    [HttpPost("oauth/exchange")]
+    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ExchangeOAuthCode([FromBody] OAuthExchangeRequestDto dto, CancellationToken ct)
+    {
+        try
+        {
+            var tokens = await authService.ExchangeOAuthCodeAsync(dto.Code, dto.CodeVerifier, ct);
+            return Ok(tokens);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized(new { error = "Invalid or expired code." });
+        }
+    }
+
+    /// <summary>
+    /// Native Sign in with Apple (iOS). The app posts the ASAuthorization identityToken
+    /// (+ the full name, only present on first authorization). Returns the standard token pair.
+    /// </summary>
+    [HttpPost("apple")]
+    [ProducesResponseType(typeof(TokenResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Apple([FromBody] AppleSignInDto dto, CancellationToken ct)
+    {
+        try
+        {
+            var tokens = await authService.SignInWithAppleAsync(dto, ct);
+            return Ok(tokens);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized(new { error = "Apple sign-in could not be verified." });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "APPLE_NO_EMAIL")
+        {
+            return BadRequest(new { error = "Apple did not share an email. Please sign in with Google or email instead." });
+        }
+        catch (InvalidOperationException)   // Apple not configured
+        {
+            return BadRequest(new { error = "Apple sign-in is not available." });
+        }
+    }
+
+    /// <summary>
+    /// Permanently delete the current user's account (App Store 5.1.1(v) / Play policy).
+    /// Password users re-enter their password; OAuth/Apple-only users pass confirm=true.
+    /// Anonymizes + deactivates the account and revokes all sessions and devices.
+    /// </summary>
+    [HttpPost("delete-account")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DeleteAccount([FromBody] DeleteAccountDto dto, CancellationToken ct)
+    {
+        try
+        {
+            await authService.DeleteAccountAsync(CurrentUserId, dto, ct);
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Unauthorized(new { error = "Password is incorrect." });
+        }
+        catch (ArgumentException ex) when (ex.Message == "CONFIRM_REQUIRED")
+        {
+            return BadRequest(new { error = "Confirmation is required to delete your account." });
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("SOLE_OWNER:"))
+        {
+            var org = ex.Message["SOLE_OWNER:".Length..];
+            return Conflict(new
+            {
+                error = $"You are the only owner of \"{org}\" and it has other members. " +
+                        "Transfer ownership or remove the members before deleting your account.",
+            });
         }
     }
 

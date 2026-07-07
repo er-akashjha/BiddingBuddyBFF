@@ -1,10 +1,50 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v7**
+Current version: **v10**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v10 — 2026-07-06 19:30 IST
+
+**Per-tender source-portal provenance (migration 0021) — so IREPS/eProcure tenders can be told apart from GeM in the UI.**
+
+- BidProcessor already sent the source portal in the `/internal/tenders` payload, but the BFF had no
+  column and silently dropped it. Migration `0021_add_tender_platform.sql` adds `tenders.platform`
+  (default `'gem'`, indexed); `Tender` entity + `TenderConfiguration` + `UpsertTenderDto` +
+  `InternalPipelineService` (insert + update) now persist it.
+- **Surfaced to the UI on the display path (Mongo-proxied):** `TenderListItemDto` + `TenderDetailDto`
+  gained an optional `Platform`, threaded from the Services `TenderSource.Platform` in
+  `TenderDetailsTranslator` (and from the Postgres entity in `TenderService`). No breaking DTO changes
+  (trailing optional param).
+- **Go-live:** apply migration 0021 (`POST /internal/migrations`), restart BFF. Ingestion for IREPS
+  already works via BidProcessor's generic `PortalProfile` fallback — this change only adds the
+  provenance/badge. dotnet build clean.
+
+## v9 — 2026-07-06 18:15 IST
+
+**Mobile app backend, phase 2 — push, Apple sign-in, account deletion, refresh grace (migration 0020).** Work items B2/B3/B4/B7/B9 from `docs/mobile-app/PLAN.md`.
+
+- **Push device registry + FCM fan-out (B3/B4).** Migration `0020_add_user_devices.sql`: new `user_devices` table (per-FCM-token, `push_enabled` per-device switch, `revoked_at`) + Firebase `notification_templates` cloned from the InApp rows for the push-worthy money/deadline/assignment/outcome events (guarantees Handlebars variable + deep-link metadata parity). New **`/api/devices`** (org-agnostic, JWT only — added to `OrgContextMiddleware` skip list): `POST` upsert (register/refresh), `GET` list, `PATCH /push` (per-device mute), `DELETE /{token}`. **`NotificationPublisher` now fans out push centrally** — for a push-worthy template it resolves the InApp recipient's user → their newest active push-enabled device → appends one Firebase recipient (best-effort; never blocks the in-app/email delivery). No call-site changes.
+- **Sign in with Apple (B2).** New `POST /api/auth/apple`: `AppleTokenVerifier` validates the identity token against Apple's JWKS (issuer, audience = `OAuth:Apple:ClientId` = the bundle id, RS256, lifetime; JWKS cached 24h), then reuses a new shared `LinkOrCreateUserAsync` (extracted from the OAuth path) to find-or-create the user + link `oauth_accounts(provider='apple')`. Handles Apple's first-auth-only email/name.
+- **Account deletion (B7 — store blocker).** New `POST /api/auth/delete-account` (JWT): password users re-enter their password, OAuth/Apple-only users pass `confirm=true`; sole-owner-of-a-shared-org is blocked (409) until ownership is transferred, solo orgs are deactivated; then soft-delete + PII anonymize the user and revoke all refresh tokens + devices + oauth accounts, in one transaction.
+- **Refresh-rotation grace window (B9).** A just-revoked refresh token can rotate once more within 60s (the flaky-mobile-network lost-response case) instead of forcing logout; reuse outside the window is still rejected as compromise.
+- **Config:** `OAuth:Apple:ClientId` (+ optional `OAuth:Apple:ClientIds`). Firebase push activates when BidProcessor's `Notifications:Firebase:ServiceAccountJsonPath` points to a real service-account JSON.
+- **Go-live:** apply migration 0020 (`POST /internal/migrations`), restart BFF, configure Firebase on BidProcessor. Plumbing: `UserDevice` entity + config + DbSet, `IDeviceService`/`DeviceService`, `AppleTokenVerifier`, DTOs (`RegisterDeviceDto`, `AppleSignInDto`, `DeleteAccountDto`), `database/schema.sql` reference updated. dotnet build clean.
+
+---
+
+## v8 — 2026-07-06 14:45 IST
+
+**Mobile OAuth handoff — one-time code + PKCE exchange (migration 0019).** First backend piece of the TendersAgent mobile app (plan: `docs/mobile-app/PLAN.md`, work item B1).
+
+- **Why:** the existing OAuth callback redirects tokens to the SPA callback URL — unusable for a native app and unsafe in a redirect URL. Mobile flows now receive a 60-second single-use code instead; tokens only ever travel in a POST response body.
+- **`GET /api/auth/oauth/{provider}`** accepts optional `client=mobile` + `code_challenge` (PKCE S256, RFC 7636 shape enforced) + `redirect_uri`. Mobile redirects must match `OAuth:Mobile:RedirectAllowlist` (new config; defaults `tendersagent://auth`, `biddingbuddymobile://auth`; Development also accepts `exp://`/`exps://` for Expo Go). The extra parameters ride inside the existing signed state JWT — web flows are byte-for-byte unchanged.
+- **Callback** (`/oauth/{provider}/callback`): when the validated state carries `client=mobile`, mints a one-time code (SHA-256 hashed at rest, 60 s TTL) and 302s to `{redirect_uri}?code=…&is_new=…` (or `?error=…`). Web path untouched.
+- **New `POST /api/auth/oauth/exchange`** `{ code, codeVerifier }` → atomic single-use claim (`ExecuteUpdate` on `used_at`), constant-time S256 verifier check, then the standard token pair (same shape as `/login`).
+- **Migration `0019_add_oauth_exchange_codes.sql`:** new `oauth_exchange_codes` table (+ `database/schema.sql` reference updated). Apply via `POST /internal/migrations` after deploy.
+- **Plumbing:** `OAuthExchangeCode` entity + EF configuration + DbSet; `ITokenService` state-token methods now carry `OAuthStateData` (returnUrl/client/challenge/redirect); `AuthService` OAuth callback refactored into a shared `ResolveOAuthUserAsync` used by both web and mobile completions (WELCOME still fires once on first-time signup).
 
 ## v7 — 2026-07-06 11:30 IST
 

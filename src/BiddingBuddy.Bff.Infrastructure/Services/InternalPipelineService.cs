@@ -58,6 +58,7 @@ public class InternalPipelineService(
                 AiSummary        = dto.AiSummary,
                 AiTags           = dto.AiTags,
                 RawData          = dto.RawData,
+                Platform         = string.IsNullOrWhiteSpace(dto.Platform) ? "gem" : dto.Platform,
             };
             db.Tenders.Add(tender);
             await db.SaveChangesAsync(ct);
@@ -92,6 +93,8 @@ public class InternalPipelineService(
         existing.RiskScore        = dto.RiskScore ?? existing.RiskScore;
         existing.AiSummary        = dto.AiSummary ?? existing.AiSummary;
         existing.AiTags           = dto.AiTags ?? existing.AiTags;
+        // Keep a populated platform; only overwrite when a non-blank value arrives.
+        if (!string.IsNullOrWhiteSpace(dto.Platform)) existing.Platform = dto.Platform;
         if (dto.RawData is not null) existing.RawData = dto.RawData;
 
         await db.SaveChangesAsync(ct);

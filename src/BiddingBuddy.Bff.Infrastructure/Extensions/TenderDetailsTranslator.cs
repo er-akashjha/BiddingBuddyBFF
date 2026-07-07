@@ -68,7 +68,8 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                 Timeline:         tender.Timeline,
                 // Previously dropped — now surfaced to the UI.
                 SourceUrl:        tender.Source?.SourceUrl,
-                TechnicalSpecifications: tender.TechnicalSpecifications);
+                TechnicalSpecifications: tender.TechnicalSpecifications,
+                Platform:         tender.Source?.Platform);
         }
 
 
@@ -104,7 +105,8 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                     AiScore:       item.Ai?.OpportunityScore ?? 0,
                     WinProbability: 0,   // not available in TenderSearchItemDto
                     IsTracked:     false, // not available at this stage
-                    IsSaved:       false  // not available at this stage
+                    IsSaved:       false, // not available at this stage
+                    Platform:      item.Source?.Platform
                 );
 
                 tenderList.Add(dto); // include all tenders regardless of title

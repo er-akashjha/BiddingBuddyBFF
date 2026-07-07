@@ -17,6 +17,7 @@ public class AuthService(
     IRefreshTokenRepository refreshRepo,
     IOrganizationRepository orgRepo,
     IOAuthProviderService oauthProvider,
+    IAppleTokenVerifier appleVerifier,
     TokenService tokenService,
     INotificationPublisher notifications,
     BffDbContext db,
@@ -359,10 +360,164 @@ public class AuthService(
     public async Task<TokenResponseDto> HandleOAuthCallbackAsync(
         string provider, string code, CancellationToken ct = default)
     {
-        // 1. Exchange code for user info from provider
-        var info = await oauthProvider.ExchangeCodeAsync(provider, code, ct);
+        var (user, isNewUser) = await ResolveOAuthUserAsync(provider, code, ct);
+        var tokens = await IssueTokensAsync(user, ct);
+        return tokens with { IsNewUser = isNewUser };
+    }
 
-        // 2. Find or create the linked OAuthAccount
+    public async Task<MobileOAuthCodeDto> HandleOAuthCallbackForMobileAsync(
+        string provider, string code, string codeChallenge, CancellationToken ct = default)
+    {
+        var (user, isNewUser) = await ResolveOAuthUserAsync(provider, code, ct);
+
+        // Hand the app a short-lived single-use code instead of tokens — tokens must
+        // never ride a redirect URL (system logs, link interception). The app redeems
+        // it at POST /api/auth/oauth/exchange together with its PKCE verifier.
+        var rawCode = Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+        db.OAuthExchangeCodes.Add(new OAuthExchangeCode
+        {
+            UserId = user.Id,
+            CodeHash = HashToken(rawCode),
+            CodeChallenge = codeChallenge,
+            IsNewUser = isNewUser,
+            ExpiresAt = DateTime.UtcNow.Add(ExchangeCodeLifetime),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+
+        return new MobileOAuthCodeDto(rawCode, isNewUser);
+    }
+
+    public async Task<TokenResponseDto> ExchangeOAuthCodeAsync(
+        string code, string codeVerifier, CancellationToken ct = default)
+    {
+        var hash = HashToken(code);
+        var stored = await db.OAuthExchangeCodes.FirstOrDefaultAsync(c => c.CodeHash == hash, ct)
+            ?? throw new UnauthorizedAccessException("INVALID_CODE");
+
+        // Atomic single-use claim — a replayed redirect or a double redeem finds 0 rows.
+        var claimed = await db.OAuthExchangeCodes
+            .Where(c => c.Id == stored.Id && c.UsedAt == null && c.ExpiresAt > DateTime.UtcNow)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, DateTime.UtcNow), ct);
+        if (claimed == 0)
+            throw new UnauthorizedAccessException("INVALID_CODE");
+
+        if (!PkceVerifierMatches(codeVerifier, stored.CodeChallenge))
+            throw new UnauthorizedAccessException("INVALID_CODE");
+
+        var user = await userRepo.FindByIdAsync(stored.UserId, ct)
+            ?? throw new UnauthorizedAccessException("INVALID_CODE");
+
+        user.LastLoginAt = DateTime.UtcNow;
+        await userRepo.UpdateAsync(user, ct);
+
+        var tokens = await IssueTokensAsync(user, ct);
+        return tokens with { IsNewUser = stored.IsNewUser };
+    }
+
+    public async Task<TokenResponseDto> SignInWithAppleAsync(AppleSignInDto dto, CancellationToken ct = default)
+    {
+        var identity = await appleVerifier.VerifyAsync(dto.IdentityToken, ct);
+
+        // Apple sends the email only on the FIRST authorization. On later sign-ins it's
+        // absent, but by then the oauth_account (keyed on the Apple sub) already carries it.
+        var linked = await oauthRepo.FindAsync("apple", identity.Sub, ct);
+        var email = identity.Email ?? linked?.Email;
+        if (string.IsNullOrWhiteSpace(email))
+            throw new InvalidOperationException("APPLE_NO_EMAIL");
+
+        var info = new OAuthUserInfo(
+            ProviderUserId: identity.Sub,
+            Email: NormalizeEmail(email),
+            Name: string.IsNullOrWhiteSpace(dto.FullName) ? "Apple User" : dto.FullName!.Trim(),
+            AvatarUrl: null, AccessToken: null, ProviderRefreshToken: null, TokenExpiresAt: null);
+
+        var (user, isNewUser) = await LinkOrCreateUserAsync("apple", info, ct);
+        var tokens = await IssueTokensAsync(user, ct);
+        return tokens with { IsNewUser = isNewUser };
+    }
+
+    public async Task DeleteAccountAsync(Guid userId, DeleteAccountDto dto, CancellationToken ct = default)
+    {
+        var user = await userRepo.FindByIdAsync(userId, ct)
+            ?? throw new KeyNotFoundException("User not found.");
+
+        // Re-auth: password users must re-enter it; OAuth/Apple-only users confirm explicitly.
+        if (user.PasswordHash is not null)
+        {
+            if (string.IsNullOrEmpty(dto.Password) || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
+                throw new UnauthorizedAccessException("INVALID_CREDENTIALS");
+        }
+        else if (!dto.Confirm)
+        {
+            throw new ArgumentException("CONFIRM_REQUIRED");
+        }
+
+        // Sole-owner guard: an org that still has other active members would be orphaned.
+        // Block until ownership is transferred; solo orgs (only this user) are deactivated.
+        var ownedOrgs = await db.Organizations
+            .Where(o => o.OwnedBy == userId && o.IsActive)
+            .ToListAsync(ct);
+        foreach (var org in ownedOrgs)
+        {
+            var otherActiveMembers = await db.OrgMembers
+                .CountAsync(m => m.OrgId == org.Id && m.UserId != userId && m.Status == "active", ct);
+            if (otherActiveMembers > 0)
+                throw new InvalidOperationException($"SOLE_OWNER:{org.Name}");
+        }
+
+        // Everything past this point is the actual deletion — one transaction.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        foreach (var org in ownedOrgs) org.IsActive = false;  // solo orgs → deactivated
+
+        await db.OrgMembers.Where(m => m.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.RefreshTokens.Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, DateTime.UtcNow), ct);
+        await db.UserDevices.Where(d => d.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.OAuthAccounts.Where(a => a.UserId == userId).ExecuteDeleteAsync(ct);
+        await db.OAuthExchangeCodes.Where(c => c.UserId == userId).ExecuteDeleteAsync(ct);
+
+        // Soft-delete + anonymize the user: keeps referential integrity for authored bids/
+        // activities/comments while erasing PII (GDPR-style right-to-erasure).
+        user.IsActive = false;
+        user.Email = $"deleted+{user.Id:N}@tendersagent.invalid";
+        user.Name = "Deleted user";
+        user.Phone = null;
+        user.AvatarUrl = null;
+        user.PasswordHash = null;
+        user.UpdatedAt = DateTime.UtcNow;
+        await userRepo.UpdateAsync(user, ct);
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
+        log.LogInformation("Account {UserId} deleted (soft + anonymized); {OrgCount} solo org(s) deactivated.",
+            userId, ownedOrgs.Count);
+    }
+
+    /// <summary>
+    /// Shared OAuth completion: exchange the provider code, find-or-create the user and
+    /// linked oauth_account, stamp last-login, and fire WELCOME on first-time signup.
+    /// Both the web callback (tokens) and the mobile callback (one-time code) build on this.
+    /// </summary>
+    private async Task<(User user, bool isNewUser)> ResolveOAuthUserAsync(
+        string provider, string code, CancellationToken ct)
+    {
+        // Exchange the provider code for a verified identity, then link/create the user.
+        var info = await oauthProvider.ExchangeCodeAsync(provider, code, ct);
+        return await LinkOrCreateUserAsync(provider, info, ct);
+    }
+
+    /// <summary>
+    /// Given an already-verified external identity (from an OAuth code exchange OR a
+    /// verified Apple identity token), find-or-create the user, link the oauth_account,
+    /// stamp last-login, and fire WELCOME on first-time signup.
+    /// </summary>
+    private async Task<(User user, bool isNewUser)> LinkOrCreateUserAsync(
+        string provider, OAuthUserInfo info, CancellationToken ct)
+    {
+        // Find or create the linked OAuthAccount
         var oauthAccount = await oauthRepo.FindAsync(provider, info.ProviderUserId, ct);
 
         User user;
@@ -418,15 +573,19 @@ public class AuthService(
             user.AvatarUrl = info.AvatarUrl;
         await userRepo.UpdateAsync(user, ct);
 
-        var tokens = await IssueTokensAsync(user, ct);
-
         // First-time OAuth signup → fire WELCOME. The user has no org yet (orgs are
         // created/joined later), so OrganizationName is left blank in the payload.
         if (isNewUser)
             await SendWelcomeAsync(user, organizationName: null, ct);
 
-        return tokens with { IsNewUser = isNewUser };
+        return (user, isNewUser);
     }
+
+    // Single-use refresh rotation is unforgiving on flaky mobile networks: if the client
+    // never receives the rotation response, its only token is already revoked → forced logout.
+    // A short grace lets a *just-revoked* token rotate once more (the lost-response case);
+    // reuse outside the window is still treated as compromise.
+    private static readonly TimeSpan RefreshGraceWindow = TimeSpan.FromSeconds(60);
 
     public async Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default)
     {
@@ -434,8 +593,20 @@ public class AuthService(
         var stored = await refreshRepo.FindByHashAsync(hash, ct)
             ?? throw new UnauthorizedAccessException("Invalid refresh token.");
 
-        if (!stored.IsActive)
-            throw new UnauthorizedAccessException("Refresh token has expired or been revoked.");
+        if (stored.IsExpired)
+            throw new UnauthorizedAccessException("Refresh token has expired.");
+
+        if (stored.IsRevoked)
+        {
+            // Within the grace window, tolerate the lost-response replay and issue a fresh pair.
+            if (stored.RevokedAt is { } revokedAt && DateTime.UtcNow - revokedAt <= RefreshGraceWindow)
+            {
+                var graceUser = await userRepo.FindByIdAsync(stored.UserId, ct)
+                    ?? throw new UnauthorizedAccessException("User not found.");
+                return await IssueTokensAsync(graceUser, ct);
+            }
+            throw new UnauthorizedAccessException("Refresh token has been revoked.");
+        }
 
         var user = await userRepo.FindByIdAsync(stored.UserId, ct)
             ?? throw new UnauthorizedAccessException("User not found.");
@@ -521,6 +692,21 @@ public class AuthService(
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    // ── Mobile OAuth exchange helpers ──────────────────────────────────────────
+
+    private static readonly TimeSpan ExchangeCodeLifetime = TimeSpan.FromSeconds(60);
+
+    private static string Base64UrlEncode(byte[] bytes)
+        => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    /// <summary>RFC 7636 S256: base64url(SHA256(verifier)) must equal the pinned challenge.</summary>
+    private static bool PkceVerifierMatches(string verifier, string challenge)
+    {
+        var computed = Base64UrlEncode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.ASCII.GetBytes(computed), Encoding.ASCII.GetBytes(challenge));
     }
 
     // ── Email-verification (OTP) helpers ───────────────────────────────────────
