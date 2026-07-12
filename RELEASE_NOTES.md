@@ -1,10 +1,35 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v10**
+Current version: **v13**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v13 — 2026-07-08 IST
+
+**Multi-portal tender identity — code follow-up to v12.**
+
+- **`InternalPipelineService.UpsertTenderAsync` now keys the lookup on `(platform, gem_tender_id)`** — matches the composite uniqueness added by migration `0022`. Platform is normalized to lowercase on entry (older pipelines that send `"GeM"` no longer create duplicate rows). The update-path `Platform` overwrite was removed (identity is fixed once matched).
+- **`TenderSearchQueryDto.Platforms`** — new multi-select portal filter parameter. `BiddingBuddyServicesClient.BuildSearchUrl` forwards each value as a `Platforms` query param to BiddingBuddyServices. UI can now do `?platforms=gem&platforms=eprocure` to filter by source portal.
+- **Tests: `InternalUpsertPlatformTests`** (EF InMemory) — pins the write-path behaviour: default-to-gem, cross-portal no-clobber (same `gem_tender_id`, different `Platform` → 2 rows), case-insensitive same-portal upsert. Adds `Microsoft.EntityFrameworkCore.InMemory` to the test project.
+- **Go-live:** ship this image before applying migration 0022. Without this code, migration 0022's composite index turns cross-portal collisions from silent misassignment into `unique_violation` errors on write.
+
+## v12 — 2026-07-07 IST
+
+**Multi-portal tender identity — composite uniqueness (migration 0022).**
+
+- Migration `0022_tender_platform_uniqueness.sql` extends v10's `0021` (which added the `tenders.platform` column + index) with the identity fix: **drops** the single-column `tenders_gem_tender_id_key` and **replaces** it with a composite `ux_tenders_platform_tender_id ON (platform, gem_tender_id)`. Without this, two portals emitting the same `gem_tender_id` would silently overwrite each other's rows on upsert. The column name `gem_tender_id` stays — it now means "platform tender id"; renaming would ripple through bids/orders joins for zero behavioural gain.
+- No code changes in this release; ingestion continues to use the existing key. A follow-up will move `InternalPipelineService`'s upsert to key on `(platform, gem_tender_id)` explicitly and add a `Platforms` filter param to search — separated so this migration can ship independently.
+- **Go-live:** apply migration 0022 (`POST /internal/migrations`) right after deploy.
+
+## v11 — 2026-07-04 19:27 IST
+
+### Full-archive sitemap via keyset enumeration
+- `SitemapController` now enumerates **every** tender (full archive, ~56k incl. closed) via a keyset walk of the new BiddingBuddyServices `GET /api/tenders/enumerate` endpoint (cursor by `_id`), replacing deep-`skip` pagination that returned **HTTP 400** past ~10k records (Atlas sort-memory limit). Pre-rendered `<url>` lines are cached 6h; index + chunks slice them (10k/chunk). Removes the expired-tender filter.
+- `SsrController`: closed tenders are now indexable (removed `noindex`-on-closed) — the archive should be crawlable; only genuine 404s stay `noindex`.
+- Adds `IBiddingBuddyServicesClient.EnumerateTendersAsync` + `TenderEnumerationDto`.
+- Verified locally against Atlas: **55,909** tender URLs across 6 chunks (was 918). Requires BiddingBuddyServices enumerate endpoint deployed first.
 
 ## v10 — 2026-07-06 19:30 IST
 

@@ -258,9 +258,11 @@ public class SsrController(IBiddingBuddyServicesClient servicesClient, IConfigur
         body.Append("<p><a href=\"").Append(E(Abs("/explore"))).Append("\">Browse more GeM tenders</a></p>");
         body.Append("</main>");
 
+        // Full archive: closed tenders stay indexable (the page shows their status);
+        // only genuine 404s are noindex. `closed` still drives the meta description.
         return Html(Page(
             $"{t.Title} — GeM Tender | Tenders Agent",
-            description, canonicalPath, body.ToString(), jsonLd, noindex: closed));
+            description, canonicalPath, body.ToString(), jsonLd));
     }
 
     [HttpGet("/about")]

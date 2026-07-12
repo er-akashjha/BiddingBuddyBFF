@@ -10,6 +10,7 @@ public record TenderSearchQueryDto
     public string?   CategorySecondary { get; init; }
     public List<string>? Categories    { get; init; }   // multi-select category filter
     public List<string>? States        { get; init; }   // multi-select state filter
+    public List<string>? Platforms     { get; init; }   // multi-select source-portal filter ("gem", "eprocure", …)
     public string?   Tag               { get; init; }
     public string?   Organization      { get; init; }
     public string?   Ministry          { get; init; }
@@ -176,6 +177,9 @@ public record TenderFacetsDto(
     IReadOnlyList<string> Categories,
     IReadOnlyList<string> States
 );
+
+/// <summary>Light tender projection for cursor enumeration (sitemap). Mirrors the Services TenderEnumerationItem.</summary>
+public record TenderEnumerationDto(string Id, string Title, DateTime UpdatedAt);
 
 /// <summary>Paged tender list returned to the BFF client (items translated to TenderListItemDto)</summary>
 public record PagedTenderListDto(
