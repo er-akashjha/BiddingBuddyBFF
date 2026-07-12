@@ -33,6 +33,7 @@ public class OrganizationService(
             Pincode           = dto.Pincode,
             Website           = dto.Website,
             GemSellerId       = dto.GemSellerId,
+            GemSellerName     = dto.GemSellerName,
             PrimaryCategory   = dto.PrimaryCategory,
         };
 
@@ -82,6 +83,7 @@ public class OrganizationService(
         if (dto.Pincode    is not null) org.Pincode           = dto.Pincode;
         if (dto.Website    is not null) org.Website           = dto.Website;
         if (dto.GemSellerId is not null) org.GemSellerId     = dto.GemSellerId;
+        if (dto.GemSellerName is not null) org.GemSellerName = dto.GemSellerName;
         if (dto.PrimaryCategory is not null) org.PrimaryCategory = dto.PrimaryCategory;
         if (dto.LogoUrl    is not null) org.LogoUrl           = dto.LogoUrl;
 
@@ -540,7 +542,7 @@ public class OrganizationService(
             org.Id, org.Name, org.Slug, org.Gstin, org.Pan,
             org.Industry, org.CompanySize, org.RegisteredAddress,
             org.City, org.State, org.Pincode, org.Website,
-            org.GemSellerId, org.PrimaryCategory, org.LogoUrl,
+            org.GemSellerId, org.GemSellerName, org.PrimaryCategory, org.LogoUrl,
             org.IsActive, userRole, org.CreatedAt,
             org.Members.Select(m => MapMember(m, stats.GetValueOrDefault(m.UserId))).ToList());
 

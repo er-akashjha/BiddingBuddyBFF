@@ -1,10 +1,52 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v13**
+Current version: **v15**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v15 — 2026-07-12 09:30 IST
+
+**Reliable won/lost resolution for tender awards** — closes the seller-identity gap flagged in v14.
+`OnTenderAwardedAsync` now resolves each org's open bid by **matching its seller identity to the award
+ladder** (won if the org is L1-Qualified, else lost with its rank), instead of the value-match heuristic.
+
+- Seller identity = new `organizations.gem_seller_name` (explicit, exact-as-on-GeM) **or** the org name
+  as a zero-config fallback — so resolution works out of the box for orgs whose registered name matches
+  their GeM seller name, with the override for precision. Names are normalized (lowercase, alphanumeric,
+  collapsed whitespace) before matching. Value-match remains as a last-resort fallback.
+- `gem_seller_name` added via **migration `0024`** + `Organization` entity/config + `CreateOrgDto`/
+  `UpdateOrgDto`/`OrgDetailDto` + `OrganizationService` (create/update/detail). Settable via the existing
+  `PATCH /api/organizations/{id}` (already a partial update).
+- **Go-live:** apply migrations `0023` (from v14) **and** `0024` before deploying. Build clean; 30 tests green.
+
+## v14 — 2026-07-12 08:45 IST
+
+**Tender results (awards) — Phase 3 of the tender-results feature** (design: root
+`docs/tender-results/PLAN.md`). Generic award data stays in Mongo (BFF proxies it); only the
+org-specific reactions (bid resolution + notifications) touch Postgres.
+
+- **New internal endpoint `POST /internal/tenders/on-awarded`** (`[PipelineApiKey]`) → new
+  `IInternalPipelineService.OnTenderAwardedAsync`. Platform + gem id are in the BODY (`TenderAwardedDto`
+  — the bid number has slashes). It:
+  1. flips the local tender's `status` → `awarded`;
+  2. **resolves each org's open bid** to won/lost by matching their recorded `our_bid_value` to the award
+     ladder (high-confidence exact match only; unmatched bids left for the user), writing a `bid_activities`
+     audit row (actor = assignee/creator, since a pipeline change has no interactive user);
+  3. **notifies trackers** — orgs with a bid ∪ tracked/saved (`org_tender_settings`) ∪ interest-matched
+     (`tender_matches`), once per org (deduped via `notification_reminders` `AWARDED:{orgId}`), to bid
+     assignees + owner/admin/bid_manager, via the new `TENDER_AWARDED` template (Email + InApp).
+     Best-effort — never throws.
+- **New `TENDER_AWARDED` notification template** seeded by **migration `0023`** (Email + InApp; InApp
+  metadata carries orgId/entityId for the inbox). *No new table.*
+- **Read proxy**: `GET /api/tenders/{id}/result` (resolves platform+gem-id off the raw tender, then
+  proxies `GET /api/tender-results/by-tender` from Services; 404 until awarded) + new `MarketController`
+  `GET /api/market/pricing?category=&state=`. New `TenderResultDto`/`MarketPricingStatsDto` + client
+  methods on `IBiddingBuddyServicesClient` (with null-on-404).
+- ⚠️ **Design gap flagged:** `bids` carries no seller identity, so won/lost auto-resolution is a
+  value-match heuristic today; a proper org↔seller mapping is the follow-up (PLAN §9/§11).
+- **Go-live:** apply migration `0023` before deploying this image. Build clean; 30 BFF tests green.
 
 ## v13 — 2026-07-08 IST
 

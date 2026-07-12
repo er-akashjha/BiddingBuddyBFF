@@ -113,6 +113,27 @@ public class TendersController(
         return Ok(new { url = presigned.Url, expiresAt = presigned.ExpiresAt });
     }
 
+    /// <summary>
+    /// Award result (winner + full competitive price ladder) for a tender, proxied from
+    /// BiddingBuddyServices. 404 until the gem-results pipeline has recorded an award. The route
+    /// carries the Mongo id, so we resolve the platform + platform-tender-id off the raw tender first.
+    /// </summary>
+    [HttpGet("{id:guid}/result")]
+    [ProducesResponseType(typeof(TenderResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> GetResult(Guid id, CancellationToken ct)
+    {
+        var tender = await servicesClient.GetRawTenderAsync(id.ToString(), ct);
+        var platform = tender?.Source?.Platform;
+        var platformTenderId = tender?.Source?.PlatformTenderId;
+        if (string.IsNullOrWhiteSpace(platform) || string.IsNullOrWhiteSpace(platformTenderId))
+            return NotFound();
+
+        var result = await servicesClient.GetTenderResultAsync(platform!, platformTenderId!, ct);
+        return result is null ? NotFound() : Ok(result);
+    }
+
     /// <summary>Save a tender to the org with optional notes, tags and custom score.</summary>
     [HttpPost("{id:guid}/save")]
     [ProducesResponseType(typeof(OrgTenderSettingsDto), StatusCodes.Status200OK)]

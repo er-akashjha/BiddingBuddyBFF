@@ -7,6 +7,7 @@ using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace BiddingBuddy.Bff.Api.Controllers;
 
@@ -29,7 +30,10 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [ApiController]
 [AllowAnonymous]
 [EnableRateLimiting("public")]
-public class SsrController(IBiddingBuddyServicesClient servicesClient, IConfiguration config) : ControllerBase
+public class SsrController(
+    IBiddingBuddyServicesClient servicesClient,
+    IConfiguration config,
+    IMemoryCache cache) : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonLdOpts = new()
     {
@@ -263,6 +267,104 @@ public class SsrController(IBiddingBuddyServicesClient servicesClient, IConfigur
         return Html(Page(
             $"{t.Title} — GeM Tender | Tenders Agent",
             description, canonicalPath, body.ToString(), jsonLd));
+    }
+
+    // ── Programmatic hub pages (category / state) ────────────────────────────────
+    // Long-tail SEO surface: one indexable page per canonical category and state,
+    // each listing that facet's tenders + CollectionPage/BreadcrumbList JSON-LD.
+    // Caddy's /explore/* already routes these bot requests here.
+
+    [HttpGet("/explore/category/{slug}")]
+    public Task<IActionResult> CategoryHub(string slug, CancellationToken ct) => FacetHub("category", slug, ct);
+
+    [HttpGet("/explore/state/{slug}")]
+    public Task<IActionResult> StateHub(string slug, CancellationToken ct) => FacetHub("state", slug, ct);
+
+    private async Task<IActionResult> FacetHub(string field, string slug, CancellationToken ct)
+    {
+        // Resolve the URL slug back to the canonical facet value (e.g. "it-software" → "IT & Software").
+        var map = await FacetSlugMapAsync(field, ct);
+        if (!map.TryGetValue(slug, out var value)) return NotFoundPage();
+
+        var query = new TenderSearchQueryDto
+        {
+            Page = 1, PageSize = 100, SortBy = "published", SortOrder = "desc",
+            Categories = field == "category" ? new List<string> { value } : null,
+            States     = field == "state"    ? new List<string> { value } : null,
+        };
+        var paged = await servicesClient.SearchTendersPagedAsync(query, ct);
+
+        var canonicalPath = $"/explore/{field}/{slug}";
+        var (h1, title, description) = field == "category"
+            ? ($"{value} Tenders on GeM",
+               $"{value} Government (GeM) Tenders — Tenders Agent",
+               $"Browse {paged.TotalCount:N0} {value} tenders on the Government e-Marketplace (GeM). Eligibility, value, deadlines and documents for {value} government tenders across India.")
+            : ($"Government (GeM) Tenders in {value}",
+               $"GeM Tenders in {value} — Government Tenders {value} | Tenders Agent",
+               $"Browse {paged.TotalCount:N0} Government e-Marketplace (GeM) tenders in {value}. Eligibility, value, deadlines and documents for government tenders in {value}.");
+
+        var jsonLd = JsonArray(
+            new Dictionary<string, object?>
+            {
+                ["@context"] = "https://schema.org", ["@type"] = "CollectionPage",
+                ["name"] = h1, ["description"] = description, ["url"] = Abs(canonicalPath),
+            },
+            new Dictionary<string, object?>
+            {
+                ["@context"] = "https://schema.org", ["@type"] = "BreadcrumbList",
+                ["itemListElement"] = new object[]
+                {
+                    new Dictionary<string, object?> { ["@type"] = "ListItem", ["position"] = 1, ["name"] = "Home", ["item"] = Abs("/") },
+                    new Dictionary<string, object?> { ["@type"] = "ListItem", ["position"] = 2, ["name"] = "Explore tenders", ["item"] = Abs("/explore") },
+                    new Dictionary<string, object?> { ["@type"] = "ListItem", ["position"] = 3, ["name"] = h1, ["item"] = Abs(canonicalPath) },
+                },
+            });
+
+        var body = new StringBuilder();
+        body.Append("<main>");
+        body.Append("<p><a href=\"").Append(E(Abs("/explore"))).Append("\">← All GeM tenders</a></p>");
+        body.Append("<h1>").Append(E(h1)).Append("</h1>");
+        body.Append("<p>").Append(E(description)).Append("</p>");
+        if (paged.Items.Count > 0)
+        {
+            body.Append("<ul>");
+            foreach (var t in paged.Items)
+            {
+                var href = Abs($"/explore/{Seg(t.Title, t.Id)}");
+                var meta = string.Join(" · ", new[] { field == "category" ? t.State : t.Category, FmtValue(t.TenderValue) }
+                    .Where(s => !string.IsNullOrWhiteSpace(s)));
+                body.Append("<li><a href=\"").Append(E(href)).Append("\">").Append(E(t.Title)).Append("</a>");
+                if (meta.Length > 0) body.Append(" — ").Append(E(meta));
+                body.Append("</li>");
+            }
+            body.Append("</ul>");
+        }
+        else
+        {
+            body.Append("<p>No live tenders in this ").Append(field).Append(" right now — check back soon.</p>");
+        }
+        body.Append("<p><a href=\"").Append(E(Abs("/explore"))).Append("\">Browse all GeM tenders</a></p>");
+        body.Append("</main>");
+
+        return Html(Page(title, description, canonicalPath, body.ToString(), jsonLd));
+    }
+
+    /// <summary>slug → canonical facet value map (e.g. "it-software" → "IT &amp; Software"), cached 6h.</summary>
+    private async Task<Dictionary<string, string>> FacetSlugMapAsync(string field, CancellationToken ct)
+    {
+        var cacheKey = $"ssr:facetmap:{field}";
+        if (cache.TryGetValue(cacheKey, out Dictionary<string, string>? cached) && cached is not null)
+            return cached;
+
+        var values = await servicesClient.GetTenderFacetOptionsAsync(field, null, 0, ct);
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var v in values)
+        {
+            var s = SeoHelpers.Slugify(v);
+            if (s.Length > 0) map.TryAdd(s, v);   // first value wins on a slug collision
+        }
+        cache.Set(cacheKey, map, TimeSpan.FromHours(6));
+        return map;
     }
 
     [HttpGet("/about")]

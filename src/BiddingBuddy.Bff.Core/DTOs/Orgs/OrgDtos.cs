@@ -13,6 +13,7 @@ public record CreateOrgDto(
     string? Pincode,
     string? Website,
     string? GemSellerId,
+    string? GemSellerName,
     string? PrimaryCategory
 );
 
@@ -29,6 +30,7 @@ public record UpdateOrgDto(
     string? Pincode,
     string? Website,
     string? GemSellerId,
+    string? GemSellerName,
     string? PrimaryCategory,
     string? LogoUrl
 );
@@ -47,6 +49,7 @@ public record OrgDetailDto(
     string? Pincode,
     string? Website,
     string? GemSellerId,
+    string? GemSellerName,
     string? PrimaryCategory,
     string? LogoUrl,
     bool IsActive,

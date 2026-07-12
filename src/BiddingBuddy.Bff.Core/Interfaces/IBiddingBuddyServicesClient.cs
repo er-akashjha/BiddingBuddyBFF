@@ -42,4 +42,10 @@ public interface IBiddingBuddyServicesClient
     /// Tender counts grouped by state, for the public coverage map.
     /// </summary>
     Task<List<StateTenderCountDto>> GetStateTenderCountsAsync(CancellationToken ct = default);
+
+    /// <summary>The award result for a tender (winner + ladder), or null if not awarded yet.</summary>
+    Task<TenderResultDto?> GetTenderResultAsync(string platform, string platformTenderId, CancellationToken ct = default);
+
+    /// <summary>Aggregate market pricing/competition stats over awards for a category/state slice.</summary>
+    Task<MarketPricingStatsDto> GetMarketPricingAsync(string? category, string? state, CancellationToken ct = default);
 }

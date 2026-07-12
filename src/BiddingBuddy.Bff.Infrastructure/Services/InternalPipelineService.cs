@@ -116,6 +116,214 @@ public class InternalPipelineService(
         return new UpsertTenderResponseDto(existing.Id, false);
     }
 
+    public async Task OnTenderAwardedAsync(TenderAwardedDto dto, CancellationToken ct = default)
+    {
+        var platform = string.IsNullOrWhiteSpace(dto.Platform) ? "gem" : dto.Platform.Trim().ToLowerInvariant();
+
+        var tender = await db.Tenders
+            .FirstOrDefaultAsync(t => t.Platform == platform && t.GemTenderId == dto.GemTenderId, ct);
+        if (tender is null)
+        {
+            // A market-wide award for a tender we never mirrored to Postgres — nothing to resolve here.
+            logger.LogInformation("[Awarded] No local tender for {Platform}/{GemTenderId} — skipping", platform, dto.GemTenderId);
+            return;
+        }
+
+        // 1. Flip lifecycle to awarded (allowed by tenders_status_check).
+        if (!string.Equals(tender.Status, "awarded", StringComparison.OrdinalIgnoreCase))
+        {
+            tender.Status = "awarded";
+            await db.SaveChangesAsync(ct);
+        }
+
+        // 2. Resolve org bids + notify trackers (best-effort — an award must never fail the pipeline).
+        try
+        {
+            await ResolveBidsAndNotifyAsync(tender, dto, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Awarded] resolve/notify failed for {GemTenderId}", dto.GemTenderId);
+        }
+    }
+
+    /// <summary>
+    /// For each org with an open bid on the awarded tender, resolve it to won/lost by matching the
+    /// org's recorded bid value against the award ladder (high-confidence exact match only; unmatched
+    /// bids are left for the user to close). Then notify every tracking org (bidders ∪ tracked/saved ∪
+    /// interest-matched), once per org, via the TENDER_AWARDED template.
+    ///
+    /// Resolution matches the org's seller identity (<c>organizations.gem_seller_name</c>, else the
+    /// org name) against the ladder — reliable when the org has bid under a recognizable name — and
+    /// falls back to an exact bid-value match otherwise. Unmatched bids are left for the user.
+    /// </summary>
+    private async Task ResolveBidsAndNotifyAsync(Tender tender, TenderAwardedDto dto, CancellationToken ct)
+    {
+        var openBids = await db.Bids
+            .Where(b => b.TenderId == tender.Id && b.StatusCategory == "open")
+            .ToListAsync(ct);
+
+        var winnerPrice = dto.Winner?.Price ?? dto.WinningValue;
+        var winnerName  = dto.Winner?.SellerName;
+        var ladderPrices = (dto.Bidders ?? [])
+            .Where(b => b.TotalPrice.HasValue).Select(b => b.TotalPrice!.Value).ToList();
+
+        // Primary signal: match each org's seller identity to its row on the ladder (reliable).
+        var ladderByName = new Dictionary<string, AwardBidderDto>();
+        foreach (var b in dto.Bidders ?? [])
+        {
+            var key = NormalizeSeller(b.SellerName);
+            if (key.Length > 0) ladderByName.TryAdd(key, b);
+        }
+
+        // Seller identity per bidding org: the explicit GeM seller name, else the org name.
+        var bidOrgIds = openBids.Select(b => b.OrgId).Distinct().ToList();
+        var sellerByOrg = (await db.Organizations
+            .Where(o => bidOrgIds.Contains(o.Id))
+            .Select(o => new { o.Id, o.Name, o.GemSellerName })
+            .ToListAsync(ct))
+            .ToDictionary(
+                o => o.Id,
+                o => new[] { o.GemSellerName, o.Name }
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => NormalizeSeller(s!))
+                    .Where(s => s.Length > 0)
+                    .ToArray());
+
+        var outcomeByOrg = new Dictionary<Guid, string>();   // orgId → "won" | "lost"
+
+        foreach (var bid in openBids)
+        {
+            string? newStage = null, lossReason = null;
+
+            // 1. Seller-name match (reliable) — find this org's own row on the ladder.
+            AwardBidderDto? mine = null;
+            if (sellerByOrg.TryGetValue(bid.OrgId, out var names))
+                foreach (var n in names)
+                    if (ladderByName.TryGetValue(n, out var row)) { mine = row; break; }
+
+            if (mine is not null)
+            {
+                if (mine.RankNumber == 1 && mine.IsQualified)
+                {
+                    newStage = "won";
+                    bid.WonValue = dto.WinningValue ?? mine.TotalPrice ?? winnerPrice;
+                }
+                else
+                {
+                    newStage = "lost";
+                    lossReason = mine.RankNumber is int r
+                        ? (winnerName is not null ? $"Ranked L{r} — awarded to {winnerName}" : $"Ranked L{r} — not awarded")
+                        : (winnerName is not null ? $"Not awarded — won by {winnerName}" : "Not awarded");
+                }
+            }
+            // 2. Fallback: exact bid-value match against the ladder (heuristic; used when the org
+            //    has no seller name configured and their name isn't on the ladder).
+            else if (bid.OurBidValue.HasValue)
+            {
+                var v = bid.OurBidValue.Value;
+                if (winnerPrice.HasValue && v == winnerPrice.Value)
+                {
+                    newStage = "won";
+                    bid.WonValue = dto.WinningValue ?? winnerPrice;
+                }
+                else if (ladderPrices.Contains(v))
+                {
+                    newStage = "lost";
+                    lossReason = winnerName is not null && winnerPrice.HasValue
+                        ? $"Outbid — L1 {winnerName} at ₹{winnerPrice.Value:N0}"
+                        : "Not awarded (outbid)";
+                }
+            }
+
+            if (newStage is null) continue;                 // no confident match → leave for the user
+
+            var fromStage = bid.Stage;
+            bid.Stage = newStage;
+            if (lossReason is not null) bid.LossReason = lossReason;
+
+            // ActorId is NOT NULL FK → users; a pipeline change has no interactive actor, so
+            // attribute the audit row to the bid's assignee (or creator).
+            db.BidActivities.Add(new BidActivity
+            {
+                BidId     = bid.Id,
+                ActorId   = bid.AssignedTo ?? bid.CreatedBy,
+                Action    = "stage_change",
+                FromValue = fromStage,
+                ToValue   = newStage,
+                Note      = "Auto-resolved from GeM award result",
+            });
+            outcomeByOrg[bid.OrgId] = newStage;
+        }
+        if (outcomeByOrg.Count > 0) await db.SaveChangesAsync(ct);
+
+        // Recipients: bidders ∪ tracked/saved ∪ interest-matched.
+        var orgIds = new HashSet<Guid>(openBids.Select(b => b.OrgId));
+        orgIds.UnionWith(await db.OrgTenderSettings
+            .Where(s => s.TenderId == tender.Id && (s.IsTracked || s.IsSaved))
+            .Select(s => s.OrgId).ToListAsync(ct));
+        orgIds.UnionWith(await db.TenderMatches
+            .Where(m => m.TenderId == tender.Id).Select(m => m.OrgId).ToListAsync(ct));
+        if (orgIds.Count == 0) return;
+
+        var assigneesByOrg = openBids
+            .Where(b => b.AssignedTo != null)
+            .GroupBy(b => b.OrgId)
+            .ToDictionary(g => g.Key, g => g.Select(b => b.AssignedTo!.Value).Distinct().ToList());
+
+        Guid? entityId = Guid.TryParse(tender.MongoTenderId, out var mid) ? mid : null;
+        var link = entityId is { } e ? $"{FrontendBaseUrl}/tenders/{e}" : $"{FrontendBaseUrl}/tenders";
+        var winningValueStr = dto.WinningValue.HasValue ? $"₹{dto.WinningValue.Value:N0}" : "n/a";
+
+        foreach (var orgId in orgIds)
+        {
+            // Send each org's award notification only once.
+            if (!await TryClaimReminderAsync(orgId, "tender", tender.Id, $"AWARDED:{orgId}", ct))
+                continue;
+
+            var outcome = outcomeByOrg.TryGetValue(orgId, out var o) ? o : "tracked";
+
+            var targets = new Dictionary<Guid, NotificationAudienceMember>();
+            if (assigneesByOrg.TryGetValue(orgId, out var uids))
+                foreach (var uid in uids)
+                {
+                    var m = await audience.ByUserAsync(uid, ct);
+                    if (m is not null) targets[m.UserId] = m;
+                }
+            foreach (var m in await audience.ByRolesAsync(orgId, BidRoles, null, ct))
+                targets[m.UserId] = m;
+            if (targets.Count == 0) continue;
+
+            foreach (var m in targets.Values)
+            {
+                var recipients = new List<NotificationRecipientDto>
+                {
+                    new(NotificationChannel.InApp, m.UserId.ToString()),
+                };
+                if (!string.IsNullOrWhiteSpace(m.Email))
+                    recipients.Add(new NotificationRecipientDto(NotificationChannel.Email, m.Email!));
+
+                await notifications.SendAsync(new SendNotificationDto(
+                    Category:     NotificationCategory.Information,
+                    TemplateCode: "TENDER_AWARDED",
+                    UserId:       m.UserId,
+                    Payload: new Dictionary<string, object>
+                    {
+                        ["FirstName"]        = FirstNameOf(m.Name),
+                        ["TenderTitle"]      = tender.Title,
+                        ["WinnerName"]       = dto.Winner?.SellerName ?? "—",
+                        ["WinningValue"]     = winningValueStr,
+                        ["ParticipantCount"] = dto.ParticipantCount,
+                        ["Outcome"]          = outcome,
+                        ["OrgId"]            = orgId.ToString(),
+                        ["EntityId"]         = entityId?.ToString() ?? string.Empty,
+                        ["Link"]             = link,
+                    },
+                    Recipients: recipients), ct);
+            }
+        }
+    }
+
     /// <summary>
     /// Notify every org with an OPEN bid on this tender that it was amended. One claim per
     /// (tender, org, signature) in notification_reminders dedups repeated upserts of the same
@@ -206,6 +414,15 @@ public class InternalPipelineService(
 
     private static string FirstNameOf(string? fullName)
         => string.IsNullOrWhiteSpace(fullName) ? "there" : fullName.Trim().Split(' ')[0];
+
+    /// <summary>Normalize a seller/org name for matching: lowercase, keep only letters/digits, and
+    /// collapse runs of everything else to single spaces (so "ACME (P) LTD" ↔ "acme p ltd").</summary>
+    private static string NormalizeSeller(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+        var cleaned = new string(s.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : ' ').ToArray());
+        return string.Join(' ', cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
 
     public async Task<BackfillTenderMongoIdResultDto> BackfillTenderMongoIdsAsync(
         int batchSize, CancellationToken ct = default)

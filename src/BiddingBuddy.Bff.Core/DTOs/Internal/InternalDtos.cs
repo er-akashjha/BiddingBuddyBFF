@@ -81,3 +81,35 @@ public record UpsertAiAnalysisDto(
     string[]? KeyClauses,
     string? RawResponse
 );
+
+/// <summary>
+/// Body of <c>POST /internal/tenders/on-awarded</c> — BidProcessor's <c>BffAwardClient</c> sends this
+/// when a GeM tender is awarded. Property names match that client's JSON (case-insensitive bind).
+/// The BFF uses it to flip the tender to awarded, resolve org bids (won/lost), and notify trackers —
+/// all from its own Postgres tracking tables (the generic ladder stays in Mongo).
+/// </summary>
+public record TenderAwardedDto(
+    string Platform,
+    string GemTenderId,
+    decimal? WinningValue,
+    int ParticipantCount,
+    DateTimeOffset? ScrapedAt,
+    AwardWinnerDto? Winner,
+    IReadOnlyList<AwardBidderDto>? Bidders
+);
+
+public record AwardWinnerDto(
+    string SellerName,
+    decimal? Price,
+    string? Rank,
+    bool IsMse,
+    string? Confidence
+);
+
+public record AwardBidderDto(
+    string SellerName,
+    int? RankNumber,
+    string? Status,
+    decimal? TotalPrice,
+    bool IsQualified
+);
