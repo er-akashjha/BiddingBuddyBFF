@@ -1,3 +1,4 @@
+using BiddingBuddy.Bff.Core.DTOs.Alerts;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
@@ -271,6 +272,16 @@ public class MatchingService(
     {
         if (tenders.Count == 0) return false;
 
+        // UpdateSettingsAsync rejects channels this method can't deliver on, but that guard only
+        // covers writes made after it shipped — a row saved before it, or a channel added to
+        // TenderDigestChannel.Supported without being wired in below, would otherwise skip this
+        // org's digest with no trace. Say so instead of dropping it on the floor.
+        var undeliverable = channels.Except(TenderDigestChannel.Supported).ToArray();
+        if (undeliverable.Length > 0)
+            log.LogWarning(
+                "[Match] Org {OrgId} has digest channel(s) [{Channels}] that dispatch does not implement — ignored. Deliverable: [{Supported}]",
+                orgId, string.Join(",", undeliverable), string.Join(",", TenderDigestChannel.Supported));
+
         var recipients = await db.OrgMembers
             .Where(m => m.OrgId == orgId && m.Status == "active" && roles.Contains(m.Role))
             .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.Email, u.Name })
@@ -307,6 +318,16 @@ public class MatchingService(
         var firstTitle = ordered[0].Title;
         var soonestDays = ordered[0].ClosingDate.HasValue
             ? ordered[0].ClosingDate!.Value.DayNumber - today.DayNumber : (int?)null;
+
+        // The InApp/Firebase metadata (migration 0027) renders {{EntityId}} to deep-link the
+        // alert. A digest covers N tenders under ONE notification, so it can only name an
+        // entity when there is exactly one — otherwise empty, and the clients fall back to
+        // the /tenders list. Guid-or-empty because user_notifications.entity_id is uuid and
+        // mongo_tender_id is only Guid-shaped for some portals (same contract as the other
+        // tender templates in InternalPipelineService).
+        var entityId = ordered.Count == 1 && Guid.TryParse(ordered[0].MongoTenderId, out var onlyId)
+            ? onlyId.ToString()
+            : string.Empty;
         var totalValue = ordered.Sum(t => t.TenderValue ?? 0m);
         var showTotal = ordered.Count > 1 && totalValue > 0;
 
@@ -322,6 +343,7 @@ public class MatchingService(
             var payload = new Dictionary<string, object>
             {
                 ["OrgId"]       = orgId.ToString(),    // lets the InApp sender write the inbox row
+                ["EntityId"]    = entityId,            // deep-links the inbox row / push tap
                 ["FirstName"]   = FirstNameOf(r.Name),
                 ["Count"]       = ordered.Count,
                 ["One"]         = ordered.Count == 1,

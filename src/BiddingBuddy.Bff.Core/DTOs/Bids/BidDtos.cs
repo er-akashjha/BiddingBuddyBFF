@@ -172,6 +172,44 @@ public record RegisterBidAttachmentDto(
     Guid? ChecklistItemId = null
 );
 
+// ── Bid documents (the bid's document folder) ────────────────────────────────
+
+/// <summary>
+/// One row in a bid's document folder. The folder is a union of two backing stores, told
+/// apart by <paramref name="Source"/>:
+/// <list type="bullet">
+/// <item><c>vault</c> — a link to an org document (<c>bid_documents</c>). <paramref name="Id"/>
+/// is the link id; <paramref name="DocumentId"/> is the vault document. Download via
+/// <c>GET /api/documents/{documentId}/download-url</c>.</item>
+/// <item><c>attachment</c> — a file uploaded against a task-completion note
+/// (<c>bid_attachments</c>), which owns its own R2 object. <paramref name="Id"/> is the
+/// attachment id and <paramref name="DocumentId"/> is null. Download via
+/// <c>GET /api/bids/{bidId}/attachments/{id}/download-url</c>.</item>
+/// </list>
+/// Vault-only fields (<paramref name="DocumentType"/>, <paramref name="FolderName"/>,
+/// <paramref name="ExpiryDate"/>) and the attachment-only
+/// <paramref name="ChecklistItemTitle"/> are null on the other source.
+/// </summary>
+public record BidDocumentDto(
+    Guid Id,
+    string Source,
+    Guid? DocumentId,
+    string Name,
+    string FileName,
+    string? ContentType,
+    long? SizeBytes,
+    string? DocumentType,
+    string? FolderName,
+    DateOnly? ExpiryDate,
+    Guid AddedBy,
+    string? AddedByName,
+    DateTime CreatedAt,
+    string? ChecklistItemTitle
+);
+
+/// <summary>Link an existing org vault document to this bid. Re-linking is a no-op.</summary>
+public record LinkBidDocumentDto(Guid DocumentId);
+
 public record ChecklistItemDto(
     Guid Id,
     string Title,

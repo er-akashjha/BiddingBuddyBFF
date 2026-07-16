@@ -33,7 +33,10 @@ public record TenderSourceDto(
     string? PlatformTenderId,
     string? ExternalBidNumber,
     DateTime? ImportedAt,
-    string? SourceUrl = null
+    string? SourceUrl = null,
+    // "bid" | "reverse-auction" — what the portal listed. Null on records enriched before
+    // the pipeline began stamping it; TenderKind.Resolve re-derives those from the bid number.
+    string? BidKind = null
 );
 
 public record TenderCategoryDto(

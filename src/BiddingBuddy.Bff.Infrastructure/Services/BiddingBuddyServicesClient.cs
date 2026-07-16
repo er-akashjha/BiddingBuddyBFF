@@ -199,14 +199,56 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
     }
 
     public Task<MarketPricingStatsDto> GetMarketPricingAsync(
-        string? category, string? state, CancellationToken ct = default)
+        MarketFilterDto filter, CancellationToken ct = default)
+        => GetJsonAsync<MarketPricingStatsDto>(Url("api/tender-results/market/pricing", filter.ToQuery()), ct);
+
+    public Task<List<MarketGroupBucketDto>> GetMarketGroupedAsync(
+        MarketFilterDto filter, string groupBy, int limit, CancellationToken ct = default)
     {
-        var qs = new Dictionary<string, string?>();
+        var qs = filter.ToQuery();
+        qs["groupBy"] = groupBy;
+        qs["limit"] = limit.ToString();
+        return GetJsonAsync<List<MarketGroupBucketDto>>(Url("api/tender-results/market/grouped", qs), ct);
+    }
+
+    public Task<List<SellerStatsDto>> GetTopSellersAsync(
+        MarketFilterDto filter, int limit, CancellationToken ct = default)
+    {
+        var qs = filter.ToQuery();
+        qs["limit"] = limit.ToString();
+        return GetJsonAsync<List<SellerStatsDto>>(Url("api/tender-results/market/sellers", qs), ct);
+    }
+
+    public Task<SellerStatsDto?> GetSellerStatsAsync(string seller, CancellationToken ct = default)
+        => GetJsonOrNullAsync<SellerStatsDto>(
+            Url("api/tender-results/market/sellers/profile", new Dictionary<string, string?> { ["seller"] = seller }), ct);
+
+    public Task<List<HeadToHeadRecordDto>> GetHeadToHeadAsync(
+        string seller, MarketFilterDto filter, int limit, CancellationToken ct = default)
+    {
+        var qs = filter.ToQuery();
+        qs["seller"] = seller;
+        qs["limit"] = limit.ToString();
+        return GetJsonAsync<List<HeadToHeadRecordDto>>(Url("api/tender-results/market/head-to-head", qs), ct);
+    }
+
+    public Task<BuyerProfileDto?> GetBuyerProfileAsync(string buyer, CancellationToken ct = default)
+        => GetJsonOrNullAsync<BuyerProfileDto>(
+            Url("api/tender-results/market/buyer", new Dictionary<string, string?> { ["buyer"] = buyer }), ct);
+
+    public Task<List<TenderResultDto>> GetComparableAwardsAsync(
+        string? category, string? state, decimal? estimatedValue, int limit, CancellationToken ct = default)
+    {
+        var qs = new Dictionary<string, string?> { ["limit"] = limit.ToString() };
         if (!string.IsNullOrWhiteSpace(category)) qs["category"] = category;
         if (!string.IsNullOrWhiteSpace(state)) qs["state"] = state;
-        var url = "api/tender-results/market/pricing" + (qs.Count > 0 ? "?" + QueryString(qs) : string.Empty);
-        return GetJsonAsync<MarketPricingStatsDto>(url, ct);
+        if (estimatedValue.HasValue)
+            qs["estimatedValue"] = estimatedValue.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return GetJsonAsync<List<TenderResultDto>>(Url("api/tender-results/market/comparables", qs), ct);
     }
+
+    private static string Url(string path, IDictionary<string, string?> qs) =>
+        qs.Count > 0 ? $"{path}?{QueryString(qs)}" : path;
 
     private static string QueryString(IDictionary<string, string?> qs) =>
         string.Join("&", qs.Where(kv => kv.Value is not null)

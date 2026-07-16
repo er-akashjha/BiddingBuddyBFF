@@ -17,7 +17,10 @@ public record TenderListItemDto(
     bool IsTracked,
     bool IsSaved,
     // Source portal ("gem" | "eprocure" | "ireps" | …) — provenance for the UI source badge/filter.
-    string? Platform = null
+    string? Platform = null,
+    // "bid" | "reverse-auction" — what the portal listed, for the UI's kind badge. Resolved via
+    // TenderKind so older tenders (stamped before source.bidKind existed) still report correctly.
+    string? BidKind = null
 );
 
 public record TenderDetailDto(
@@ -70,7 +73,11 @@ public record TenderDetailDto(
     // ── Technical specifications extracted from the tender PDF (authoritative, not AI-guessed) ──
     IReadOnlyList<TenderTechSpecDto>? TechnicalSpecifications = null,
     // ── Source portal ("gem" | "eprocure" | "ireps" | …) — provenance for the UI source badge ──
-    string? Platform = null
+    string? Platform = null,
+    // ── "bid" | "reverse-auction" — what the portal listed, for the UI's kind badge. Resolved via
+    //    TenderKind so older tenders (stamped before source.bidKind existed) still report correctly.
+    //    Distinct from Commercial.ReverseAuction, which is the AI-inferred "has an RA phase" flag. ──
+    string? BidKind = null
 );
 
 /// <summary>

@@ -11,7 +11,10 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Route("api/bids")]
 [Authorize]
 [Produces("application/json")]
-public class BidsController(IBidService bidService, IBidAttachmentService attachmentService) : BffControllerBase
+public class BidsController(
+    IBidService bidService,
+    IBidAttachmentService attachmentService,
+    IBidDocumentService documentService) : BffControllerBase
 {
     /// <summary>
     /// Paginated list of bids for the org. Filter by <c>stage</c>
@@ -249,5 +252,50 @@ public class BidsController(IBidService bidService, IBidAttachmentService attach
     {
         var result = await attachmentService.CreateDownloadUrlAsync(CurrentOrgId, id, attachmentId, ct);
         return Ok(result);
+    }
+
+    // ── Documents (the bid's document folder) ───────────────────────────────────
+
+    /// <summary>
+    /// The bid's document folder, newest first: org vault documents linked to the bid
+    /// (<c>source: "vault"</c>) unioned with files attached to its task-completion notes
+    /// (<c>source: "attachment"</c>). Download a vault row via
+    /// <c>GET /api/documents/{documentId}/download-url</c> and an attachment row via
+    /// <c>GET /api/bids/{id}/attachments/{rowId}/download-url</c>.
+    /// </summary>
+    [HttpGet("{id:guid}/documents")]
+    [ProducesResponseType(typeof(IReadOnlyList<BidDocumentDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ListDocuments(Guid id, CancellationToken ct)
+    {
+        var result = await documentService.ListAsync(CurrentOrgId, id, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Link an already-uploaded org document to the bid. A link, not a copy — the same
+    /// document can serve any number of bids. Re-linking the same document is a no-op that
+    /// returns the existing row. 404 if the bid or the document isn't this org's.
+    /// </summary>
+    [HttpPost("{id:guid}/documents")]
+    [ProducesResponseType(typeof(BidDocumentDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> LinkDocument(Guid id, [FromBody] LinkBidDocumentDto dto, CancellationToken ct)
+    {
+        var result = await documentService.LinkAsync(CurrentOrgId, id, CurrentUserId, dto, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Remove a vault document from the bid's folder. The document itself stays in the vault.
+    /// Attachments aren't unlinkable this way — they belong to their task-completion note.
+    /// </summary>
+    [HttpDelete("{id:guid}/documents/{documentId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UnlinkDocument(Guid id, Guid documentId, CancellationToken ct)
+    {
+        await documentService.UnlinkAsync(CurrentOrgId, id, documentId, ct);
+        return NoContent();
     }
 }

@@ -82,8 +82,12 @@ public class OrganizationService(
         if (dto.State      is not null) org.State             = dto.State;
         if (dto.Pincode    is not null) org.Pincode           = dto.Pincode;
         if (dto.Website    is not null) org.Website           = dto.Website;
-        if (dto.GemSellerId is not null) org.GemSellerId     = dto.GemSellerId;
-        if (dto.GemSellerName is not null) org.GemSellerName = dto.GemSellerName;
+        // The GeM identity pair is the one thing on this DTO a user needs to be able to UNSET:
+        // it is free text on GeM's side, so a typo means "we never find you on a ladder", and the
+        // fallback to the org name only kicks in while it is blank. null still means "not
+        // supplied" for every field here, so blank — not null — is what clears these two.
+        if (dto.GemSellerId   is not null) org.GemSellerId   = NullIfBlank(dto.GemSellerId);
+        if (dto.GemSellerName is not null) org.GemSellerName = NullIfBlank(dto.GemSellerName);
         if (dto.PrimaryCategory is not null) org.PrimaryCategory = dto.PrimaryCategory;
         if (dto.LogoUrl    is not null) org.LogoUrl           = dto.LogoUrl;
 
@@ -679,4 +683,8 @@ public class OrganizationService(
         var space = fullName.IndexOf(' ');
         return space < 0 ? fullName.Trim() : fullName[..space].Trim();
     }
+
+    /// <summary>Blank → null, so a cleared field is stored as absent rather than as "".</summary>
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
