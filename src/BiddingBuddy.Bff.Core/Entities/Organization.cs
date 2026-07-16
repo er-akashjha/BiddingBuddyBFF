@@ -16,6 +16,10 @@ public class Organization
     public string? Pincode { get; set; }
     public string? Website { get; set; }
     public string? GemSellerId { get; set; }
+    /// <summary>The company's seller name exactly as it appears on GeM bid result ladders. Set by the
+    /// org so award results can resolve their bids to won/lost by matching the ladder. Optional —
+    /// resolution falls back to the org <see cref="Name"/>.</summary>
+    public string? GemSellerName { get; set; }
     public string? PrimaryCategory { get; set; }
     public string? LogoUrl { get; set; }
     public bool IsActive { get; set; } = true;

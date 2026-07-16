@@ -62,6 +62,20 @@ public class InternalController(IInternalPipelineService pipelineService) : Cont
         return NoContent();
     }
 
+    /// <summary>
+    /// A tender was awarded (from the gem-results pipeline): flip status to awarded, resolve org
+    /// bids won/lost, and notify trackers. Platform + gem id are in the body (the bid number contains
+    /// slashes, awkward in a path). Always 200 — the caller treats this as best-effort.
+    /// </summary>
+    [HttpPost("tenders/on-awarded")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> OnTenderAwarded([FromBody] TenderAwardedDto dto, CancellationToken ct)
+    {
+        await pipelineService.OnTenderAwardedAsync(dto, ct);
+        return Ok();
+    }
+
     /// <summary>Store AI analysis result for a tender (eligibility, risk factors, win strategy).</summary>
     [HttpPost("analysis")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

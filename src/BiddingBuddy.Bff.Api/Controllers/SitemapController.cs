@@ -56,6 +56,7 @@ public class SitemapController(
             sb.AppendLine("""<?xml version="1.0" encoding="UTF-8"?>""");
             sb.AppendLine("""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">""");
             AppendSitemapRef(sb, $"{BaseUrl}/sitemap-pages.xml");
+            AppendSitemapRef(sb, $"{BaseUrl}/sitemap-hubs.xml");
             for (var i = 1; i <= chunks; i++)
                 AppendSitemapRef(sb, $"{BaseUrl}/sitemap-tenders-{i}.xml");
             sb.AppendLine("</sitemapindex>");
@@ -83,6 +84,46 @@ public class SitemapController(
             sb.AppendLine("</urlset>");
             return Task.FromResult(sb.ToString());
         });
+
+    /// <summary>Programmatic hub pages — one URL per canonical category + state (+ the explore root).</summary>
+    [HttpGet("/sitemap-hubs.xml")]
+    public async Task<IActionResult> Hubs(CancellationToken ct)
+    {
+        try
+        {
+            var cached = await cache.GetOrCreateAsync("sitemap:hubs", async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = CacheTtl;
+                var categories = await servicesClient.GetTenderFacetOptionsAsync("category", null, 0, ct);
+                var states     = await servicesClient.GetTenderFacetOptionsAsync("state", null, 0, ct);
+
+                var sb = new StringBuilder();
+                OpenUrlSet(sb);
+                AppendUrl(sb, $"{BaseUrl}/explore", null);
+                AppendFacetHubs(sb, "category", categories);
+                AppendFacetHubs(sb, "state", states);
+                sb.AppendLine("</urlset>");
+                return sb.ToString();
+            });
+            return XmlContent(cached!);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to build hubs sitemap");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+    }
+
+    private void AppendFacetHubs(StringBuilder sb, string field, IEnumerable<string> values)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var v in values)
+        {
+            var slug = SeoHelpers.Slugify(v);
+            if (slug.Length == 0 || !seen.Add(slug)) continue;   // dedup slug collisions
+            AppendUrl(sb, $"{BaseUrl}/explore/{field}/{slug}", null);
+        }
+    }
 
     /// <summary>One chunk of tender detail URLs. 404 when the chunk index is past the data.</summary>
     [HttpGet("/sitemap-tenders-{index:int}.xml")]

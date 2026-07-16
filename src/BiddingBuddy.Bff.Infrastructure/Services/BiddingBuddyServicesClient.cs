@@ -185,6 +185,33 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
     public Task<List<StateTenderCountDto>> GetStateTenderCountsAsync(CancellationToken ct = default)
         => GetJsonAsync<List<StateTenderCountDto>>("api/tenders/state-counts", ct);
 
+    public Task<TenderResultDto?> GetTenderResultAsync(
+        string platform, string platformTenderId, CancellationToken ct = default)
+    {
+        // platformTenderId (GeM bid number) carries slashes → pass as a query param, not a path segment.
+        var qs = new Dictionary<string, string?>
+        {
+            ["platform"] = platform,
+            ["platformTenderId"] = platformTenderId,
+        };
+        return GetJsonOrNullAsync<TenderResultDto>(
+            "api/tender-results/by-tender?" + QueryString(qs), ct);
+    }
+
+    public Task<MarketPricingStatsDto> GetMarketPricingAsync(
+        string? category, string? state, CancellationToken ct = default)
+    {
+        var qs = new Dictionary<string, string?>();
+        if (!string.IsNullOrWhiteSpace(category)) qs["category"] = category;
+        if (!string.IsNullOrWhiteSpace(state)) qs["state"] = state;
+        var url = "api/tender-results/market/pricing" + (qs.Count > 0 ? "?" + QueryString(qs) : string.Empty);
+        return GetJsonAsync<MarketPricingStatsDto>(url, ct);
+    }
+
+    private static string QueryString(IDictionary<string, string?> qs) =>
+        string.Join("&", qs.Where(kv => kv.Value is not null)
+            .Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value!)}"));
+
     /// <summary>
     /// Shared authenticated GET + deserialize with one-shot 401 token refresh.
     /// Mirrors the inline pattern used by the older methods in this class.
@@ -231,6 +258,37 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         var stream = await response.Content.ReadAsStreamAsync(ct);
         return await JsonSerializer.DeserializeAsync<T>(stream, _json, ct)
             ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
+    }
+
+    /// <summary>Like <see cref="GetJsonAsync{T}"/> but returns <c>default</c> (null) on a 404 instead
+    /// of throwing — used for optional resources (e.g. a tender that isn't awarded yet).</summary>
+    private async Task<T?> GetJsonOrNullAsync<T>(string url, CancellationToken ct)
+    {
+        _log.LogDebug("BiddingBuddyServices → GET {Url}", url);
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
+
+        var response = await _http.SendAsync(request, ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            InvalidateToken();
+            request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
+            response = await _http.SendAsync(request, ct);
+        }
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return default;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new InvalidOperationException($"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+        }
+
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<T>(stream, _json, ct);
     }
 
     public async Task<TenderDetailDto> GetTenderAsync(

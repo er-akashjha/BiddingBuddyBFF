@@ -24,6 +24,7 @@ public class OrganizationConfiguration : IEntityTypeConfiguration<Organization>
         b.Property(x => x.Pincode).HasColumnName("pincode");
         b.Property(x => x.Website).HasColumnName("website");
         b.Property(x => x.GemSellerId).HasColumnName("gem_seller_id");
+        b.Property(x => x.GemSellerName).HasColumnName("gem_seller_name");
         b.Property(x => x.PrimaryCategory).HasColumnName("primary_category");
         b.Property(x => x.LogoUrl).HasColumnName("logo_url");
         b.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
