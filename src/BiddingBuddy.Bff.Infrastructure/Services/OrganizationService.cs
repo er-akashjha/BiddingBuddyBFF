@@ -1,3 +1,4 @@
+using BiddingBuddy.Bff.Core.DTOs.Alerts;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
 using BiddingBuddy.Bff.Core.Entities;
@@ -13,6 +14,7 @@ public class OrganizationService(
     BffDbContext db,
     IUserRepository userRepo,
     INotificationPublisher notifications,
+    ITenderAlertRuleService alertRules,
     IConfiguration config,
     ILogger<OrganizationService> log) : IOrganizationService
 {
@@ -51,6 +53,8 @@ public class OrganizationService(
 
         await db.SaveChangesAsync(ct);
 
+        await SeedStarterAlertRuleAsync(org.Id, ownerId, org.PrimaryCategory, ct);
+
         return await GetAsync(org.Id, ownerId, ct);
     }
 
@@ -70,6 +74,13 @@ public class OrganizationService(
     {
         var org = await LoadOrgAsync(orgId, ct);
         await RequireRoleAsync(orgId, userId, ["owner", "admin"], ct);
+
+        // Captured before the assignments below: onboarding mode 1 PATCHes the sector onto an org
+        // that AuthService created without one, and that first set is the only one that seeds a
+        // starter alert rule. Later sector changes are left alone — by then the org owns rules, and
+        // silently rewriting a list the user curates in Settings → Interests would be worse than
+        // doing nothing.
+        var sectorWasUnset = string.IsNullOrWhiteSpace(org.PrimaryCategory);
 
         if (dto.Name       is not null) org.Name              = dto.Name;
         if (dto.Slug       is not null) org.Slug              = dto.Slug;
@@ -92,7 +103,65 @@ public class OrganizationService(
         if (dto.LogoUrl    is not null) org.LogoUrl           = dto.LogoUrl;
 
         await db.SaveChangesAsync(ct);
+
+        if (sectorWasUnset) await SeedStarterAlertRuleAsync(orgId, userId, org.PrimaryCategory, ct);
+
         return await GetAsync(orgId, userId, ct);
+    }
+
+    /// <summary>
+    /// Turn the sector picked at onboarding into a real <c>tender_alert_rules</c> row, so the org
+    /// starts matching tenders in that category instead of the sector being stored and ignored.
+    /// </summary>
+    /// <remarks>
+    /// Two things make this work, and both are load-bearing:
+    /// <list type="bullet">
+    /// <item>The picker emits the canonical 40-entry taxonomy verbatim (ui v20), which is the same
+    /// vocabulary the pipeline assigns to <c>tenders.category</c>. <c>MatchingService</c> compares
+    /// categories with full-string <see cref="StringComparison.OrdinalIgnoreCase"/> — no substring,
+    /// no stemming — so a free-form label like "IT &amp; Software" would match zero tenders forever
+    /// and fail silently. Do not let a hand-typed sector reach this method.</item>
+    /// <item>The org has no <c>org_alert_settings</c> row yet, so <c>last_digest_sent_at</c> is NULL
+    /// and the cooldown gate does not trip: the first digest goes out on the next scan tick rather
+    /// than 6 h later. That is deliberate — it is the "right away" the onboarding page promises —
+    /// and it cannot flood, because the scan only ever evaluates tenders with
+    /// <c>alerts_scanned_at IS NULL</c>. There is no backlog to blast, only newly-ingested tenders.</item>
+    /// </list>
+    /// </remarks>
+    private async Task SeedStarterAlertRuleAsync(Guid orgId, Guid userId, string? primaryCategory, CancellationToken ct)
+    {
+        var category = NullIfBlank(primaryCategory);
+        if (category is null) return;
+
+        try
+        {
+            // Idempotency. The starter rule exists to bootstrap an org that has told us nothing
+            // else; the moment the org owns ANY rule — this one from a re-run, or one the user
+            // built by hand — it is no longer bootstrapping. `tender_alert_rules` carries no
+            // unique constraint, so without this check a repeat call just silently appends a
+            // duplicate the user has to find and delete.
+            if (await db.TenderAlertRules.AnyAsync(r => r.OrgId == orgId, ct)) return;
+
+            await alertRules.CreateAsync(orgId, userId, new CreateTenderAlertRuleDto(
+                Name:       $"{category} tenders",
+                Categories: [category],
+                States:     null,
+                Keywords:   null,
+                MinValue:   null,
+                MaxValue:   null,
+                MinAiScore: null), ct);
+
+            log.LogInformation(
+                "Seeded starter tender alert rule for org {OrgId} from primary category {Category}.",
+                orgId, category);
+        }
+        catch (Exception ex)
+        {
+            // Same contract as the notification publishes elsewhere in this class: a convenience
+            // must never fail the parent flow. The org and the sector are already committed, and
+            // the user can still build interests by hand in Settings → Interests.
+            log.LogWarning(ex, "Could not seed starter tender alert rule for org {OrgId}.", orgId);
+        }
     }
 
     public async Task DeactivateAsync(Guid orgId, Guid userId, CancellationToken ct = default)

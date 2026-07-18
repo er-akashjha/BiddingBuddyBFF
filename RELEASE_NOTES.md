@@ -1,10 +1,67 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v24**
+Current version: **v25**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v25 — 2026-07-18 11:56 IST
+
+**The sector picked at onboarding now actually does something.**
+
+`organizations.primary_category` was write-only: set by onboarding, echoed in `OrgDetailDto` and
+`/api/auth/me`, and read by no logic anywhere. Real alerting runs off `tender_alert_rules` +
+`MatchingService`, which never looked at it. So the onboarding page's promise — *"We'll surface the
+most relevant government tenders for you right away"* — resolved to nothing, and a new org got zero
+tender alerts until someone found Settings → Interests and built a rule by hand.
+
+`OrganizationService` now seeds **one category-only `tender_alert_rules` row** from the sector:
+
+- on `POST /api/organizations`, when the payload carries a sector;
+- on `PATCH /api/organizations/{id}`, only when the sector is **first** set — which is the path that
+  matters for social signups, since `AuthService` creates the org with a name only and onboarding
+  PATCHes the sector in afterwards.
+
+**This is only safe because of ui v20.** The picker now emits the canonical 40-entry taxonomy
+verbatim — the same vocabulary the pipeline assigns to `tenders.category`. `MatchingService` compares
+categories with full-string `OrdinalIgnoreCase` (no substring, no stemming), so the free-form labels
+the picker used to emit would have produced a rule matching **zero tenders, silently, forever**. Do
+not reintroduce hand-typed sectors upstream of this.
+
+**Idempotent by "org owns no rules yet".** `tender_alert_rules` has no unique constraint, so a
+repeat call would otherwise just append a duplicate the user has to find and delete. Seeding is
+skipped entirely if the org already owns any rule, and a later sector *change* does not re-seed —
+once interests exist they are the user's to curate, and quietly widening someone's feed is worse
+than doing nothing.
+
+**Failure is non-fatal**, matching the notification-publish contract elsewhere in the class: the org
+and sector are already committed, so a seeding error logs a warning and onboarding still succeeds.
+
+### On the first digest — deliberately immediate, and it cannot flood
+
+A brand-new org has no `org_alert_settings` row, so `last_digest_sent_at` is NULL and the 6 h
+cooldown gate does not trip: the first digest goes out on the next scan tick (≤15 min) rather than
+6 h later. That is the behaviour we want — it *is* the "right away" the page promises — and it is
+bounded, because `ScanNewTendersAsync` only ever evaluates tenders with `alerts_scanned_at IS NULL`.
+There is no backlog to blast, only newly-ingested tenders, and the recipient list for a fresh org is
+just the owner. No settings row is created; the lazy defaults (enabled, 360 min, Email+InApp) are
+already correct, and writing one would only duplicate them.
+
+**Known limit — the flip side of the same mechanism.** Because matching is forward-only, an org
+signing up at midday sees nothing until new tenders in its sector are ingested, i.e. after the
+downloader's next nightly run. "Right away" is really "as soon as new tenders arrive". Closing that
+gap means re-arming already-scanned tenders, which is a **global** operation
+(`POST /internal/matching/scan?backfill=true` re-arms every tender for every org) — deliberately not
+done here. A scoped `UPDATE tenders SET alerts_scanned_at = NULL WHERE category = '<sector>'` is the
+narrower option, but it still re-arms that category for *all* orgs, so it needs its own decision.
+
+No schema change — `tender_alert_rules` and `org_alert_settings` already exist (migrations `0004`,
+`0011`). Pure data path; nothing to migrate.
+
+Covered by `tests/BiddingBuddy.Bff.Tests/Orgs/StarterAlertRuleSeedingTests.cs` (9 tests: both seed
+paths, category verbatim + no invented constraints, the three no-seed cases, and both idempotency
+guards).
 
 ## v24 — 2026-07-18 11:39 IST
 

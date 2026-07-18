@@ -835,7 +835,7 @@ Response: { "access_token": "jwt...", "refresh_token": "new-opaque-string", "exp
       "role": "owner",
       "logo_url": null,
       "is_active": true,
-      "primary_category": "IT & Software"
+      "primary_category": "Computers & IT Hardware"
     }
   ],
   "connected_providers": ["google"]
@@ -874,7 +874,11 @@ Response: UserDto (same as GET /auth/me)
   "industry": "Electronics",
   "company_size": "small",
   "gem_seller_id": "GEM-SELLER-12345",
-  "primary_category": "IT Hardware",
+  // Must be a canonical taxonomy label (bidding-buddy-ui/src/lib/tenderTaxonomy.ts,
+  // BiddingBuddyServices TenderTaxonomy.cs). Creating an org with a sector seeds a
+  // tender_alert_rules row from it, and category matching is exact — an invented
+  // label like "IT Hardware" would match zero tenders, silently and forever.
+  "primary_category": "Computers & IT Hardware",
   "registered_address": "12, MG Road",
   "city": "Bengaluru",
   "state": "Karnataka",

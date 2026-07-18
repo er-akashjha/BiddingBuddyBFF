@@ -33,6 +33,7 @@ public sealed class GemSellerIdentityUpdateTests
         new(db,
             Mock.Of<IUserRepository>(),
             Mock.Of<INotificationPublisher>(),
+            new TenderAlertRuleService(db),
             new ConfigurationBuilder().Build(),
             NullLogger<OrganizationService>.Instance);
 
