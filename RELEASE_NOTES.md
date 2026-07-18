@@ -1,10 +1,56 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v25**
+Current version: **v26**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v26 — 2026-07-18 15:08 IST
+
+**Fix: workspace creation 500'd on a foreign-key violation — EF was inserting the member before
+the organization.** This is the actual cause of the onboarding outage. v24 blamed an unapplied
+migration `0024`; that was wrong. Production logs show `gem_seller_name` present, all 26 migrations
+applied, and the real error:
+
+```
+23503: insert or update on table "org_members"
+       violates foreign key constraint "org_members_org_id_fkey"
+
+INSERT INTO org_members (... org_id ...)   ← emitted FIRST
+INSERT INTO organizations (...)            ← emitted SECOND
+```
+
+`CreateAsync` built the owner row with `OrgId = org.Id`, read **before** `SaveChangesAsync`.
+`organizations.id` is store-generated (`HasDefaultValueSql("gen_random_uuid()")`), so at that point
+the value is not a usable key — and assigning the raw scalar left EF with no relationship between
+the two tracked entities. With no edge in its insert-ordering graph, EF was free to emit
+`org_members` first, and Postgres rejected the orphan FK. Every workspace creation failed.
+
+Fixed by linking through the navigation (`Organization = org`) instead of copying the scalar. EF
+then orders `organizations` first and propagates the real generated id. Both rows still go in one
+`SaveChangesAsync`, so an org can never exist without its owner.
+
+**Same defect fixed in `BidService.CreateAsync`** (`BidActivity.BidId = bid.Id` before the save,
+against `bid_activities_bid_id_fkey`) — latent, identical shape, would fail `POST /api/bids` the
+same way. `CloseChecklistItemAsync` was checked and is **correct**: it sets
+`Id = Guid.NewGuid()` explicitly, so its key is real before the save.
+
+### Why the test suite did not catch this
+
+All 140 tests use `UseInMemoryDatabase`, which enforces **neither foreign keys nor insert
+ordering** — the two things that actually broke. The suite was green throughout the outage and
+stays green after the fix, so it offers no signal here either way. Any future test covering
+relational integrity on this path needs a real PostgreSQL (Testcontainers) or at minimum SQLite
+with FK enforcement on.
+
+### Note on v24
+
+The startup auto-migration added in v24 is unrelated to this bug and stays — it is still a real
+improvement, and its log line (`Schema up to date (26 scripts already applied)`) is what proved the
+migration theory wrong. But it fixed nothing, and `database/schema.sql` had genuinely drifted, which
+made a plausible-looking wrong answer easy to reach. Prefer the production log over schema
+inference next time.
 
 ## v25 — 2026-07-18 11:56 IST
 

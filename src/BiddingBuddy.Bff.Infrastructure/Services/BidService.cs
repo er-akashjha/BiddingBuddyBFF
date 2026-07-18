@@ -265,9 +265,14 @@ public class BidService(
         };
         db.Bids.Add(bid);
 
+        // Link via the navigation, NOT bid.Id. bids.id is store-generated
+        // (gen_random_uuid()), so before SaveChanges the raw scalar is not a usable key and
+        // gives EF no edge to order the two inserts by — it is free to emit the activity
+        // first and hit `23503 bid_activities_bid_id_fkey`. Same defect that broke workspace
+        // creation on the org_members FK.
         db.BidActivities.Add(new BidActivity
         {
-            BidId   = bid.Id,
+            Bid     = bid,
             ActorId = userId,
             Action  = "created",
         });

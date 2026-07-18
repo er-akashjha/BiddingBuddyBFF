@@ -41,13 +41,27 @@ public class OrganizationService(
 
         db.Organizations.Add(org);
 
+        // Link through the navigation property — do NOT copy org.Id into OrgId here.
+        //
+        // organizations.id is store-generated (HasDefaultValueSql("gen_random_uuid()")), so
+        // before SaveChanges org.Id is not a usable key. Assigning the raw scalar gave EF a
+        // value with no relationship to the tracked principal, so the insert-ordering graph
+        // had no edge between the two: EF emitted the org_members INSERT *before* the
+        // organizations one, and Postgres rejected it with
+        //   23503 org_members_org_id_fkey
+        // which failed every single workspace creation.
+        //
+        // Setting the navigation makes the dependency explicit: EF inserts organizations
+        // first and propagates the real generated id into org_members.org_id. Both rows still
+        // go in one SaveChanges, so ownership stays atomic — an org can never be created
+        // without its owner row.
         var ownerMember = new OrgMember
         {
-            OrgId    = org.Id,
-            UserId   = ownerId,
-            Role     = "owner",
-            Status   = "active",
-            JoinedAt = DateTime.UtcNow,
+            Organization = org,
+            UserId       = ownerId,
+            Role         = "owner",
+            Status       = "active",
+            JoinedAt     = DateTime.UtcNow,
         };
         db.OrgMembers.Add(ownerMember);
 
