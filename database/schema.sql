@@ -133,6 +133,7 @@ CREATE TABLE organizations (
   pincode              TEXT,
   website              TEXT,
   gem_seller_id        TEXT,
+  gem_seller_name      TEXT,                       -- migration 0024
   primary_category     TEXT,
   logo_url             TEXT,
   is_active            BOOLEAN NOT NULL DEFAULT true,

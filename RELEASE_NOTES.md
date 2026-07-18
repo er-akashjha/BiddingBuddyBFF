@@ -1,10 +1,36 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v23**
+Current version: **v24**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v24 — 2026-07-18 11:39 IST
+
+**Fix: every new signup got a 500 on "Create workspace" — migrations now apply on startup.**
+
+`POST /api/organizations` failed for 100% of new users with `An error occurred while saving the
+entity changes`, and the SPA showed "Could not create your workspace." Root cause was **migration
+`0024_add_org_gem_seller_name.sql` never being applied in prod**. v22 added `GemSellerName` to the
+`Organization` entity + configuration, so EF emits `gem_seller_name` in the INSERT column list
+unconditionally (it has no `HasDefaultValueSql`) — Postgres answered `42703 undefined_column` and EF
+wrapped it in the opaque `DbUpdateException` above. The payload was irrelevant: the UI never sends
+the field. Onboarding was simply the first request to touch `organizations`; `GetAsync` does a full
+entity load, so the read-back on line 54 of `OrganizationService` would have failed even if the
+INSERT had succeeded.
+
+Migrations were manual (`POST /internal/migrations` after each rebuild) and had been missed across
+several releases — the v18/v22 notes flag `0023`/`0024` as outstanding. **The BFF now applies pending
+migrations on startup**, before it serves traffic, so deploy and migrate are one step. This is safe
+to run every boot: scripts are idempotent, ordered by filename, and each commits with its
+`schema_migrations` row in a single transaction.
+
+- Failure is **deliberately non-fatal** — it logs at `Fatal` and continues. A crash-looping container
+  takes the whole site down; a schema that is behind only breaks the endpoints touching new columns.
+- Opt out with `Database:AutoMigrateOnStartup=false` to gate a risky migration behind a manual window.
+
+Deploying this build applies `0023`–`0027` automatically. No manual curl required.
 
 ## v23 — 2026-07-16 20:30 IST
 
