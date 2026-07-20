@@ -5,6 +5,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="BiddingBuddy.Bff.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- SQL migration scripts run by DbMigrator at the /internal/migrations endpoint -->
     <EmbeddedResource Include="Persistence\Migrations\*.sql" />
   </ItemGroup>

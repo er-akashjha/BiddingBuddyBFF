@@ -179,6 +179,26 @@ public class BidAttachmentConfiguration : IEntityTypeConfiguration<BidAttachment
     }
 }
 
+public class BidDocumentConfiguration : IEntityTypeConfiguration<BidDocument>
+{
+    public void Configure(EntityTypeBuilder<BidDocument> b)
+    {
+        b.ToTable("bid_documents");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.OrgId).HasColumnName("org_id");
+        b.Property(x => x.BidId).HasColumnName("bid_id");
+        b.Property(x => x.DocumentId).HasColumnName("document_id");
+        b.Property(x => x.LinkedBy).HasColumnName("linked_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.HasIndex(x => new { x.BidId, x.DocumentId }).IsUnique();
+        b.HasIndex(x => x.DocumentId);
+        b.HasOne(x => x.Bid).WithMany().HasForeignKey(x => x.BidId);
+        b.HasOne(x => x.Document).WithMany().HasForeignKey(x => x.DocumentId);
+        b.HasOne(x => x.Linker).WithMany().HasForeignKey(x => x.LinkedBy);
+    }
+}
+
 public class ComplianceRequirementConfiguration : IEntityTypeConfiguration<ComplianceRequirement>
 {
     public void Configure(EntityTypeBuilder<ComplianceRequirement> b)

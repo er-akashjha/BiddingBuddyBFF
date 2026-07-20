@@ -133,6 +133,7 @@ CREATE TABLE organizations (
   pincode              TEXT,
   website              TEXT,
   gem_seller_id        TEXT,
+  gem_seller_name      TEXT,                       -- migration 0024
   primary_category     TEXT,
   logo_url             TEXT,
   is_active            BOOLEAN NOT NULL DEFAULT true,
@@ -421,6 +422,7 @@ CREATE TABLE documents (
 
 CREATE INDEX idx_documents_org    ON documents (org_id);
 CREATE INDEX idx_documents_expiry ON documents (expiry_date);
+CREATE INDEX idx_documents_folder ON documents (folder_id);
 
 CREATE TRIGGER trg_documents_updated_at
   BEFORE UPDATE ON documents
@@ -443,6 +445,22 @@ CREATE TABLE document_versions (
 );
 
 CREATE INDEX idx_doc_versions_doc_id ON document_versions (document_id);
+
+-- Vault documents linked to a bid — the rows behind a bid's document folder.
+-- Declared here, after documents, though it belongs to the bids group: a link, not a copy,
+-- so one GST certificate serves every bid that needs it. Defined in migration 0026.
+CREATE TABLE bid_documents (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  bid_id      UUID NOT NULL REFERENCES bids(id)          ON DELETE CASCADE,
+  document_id UUID NOT NULL REFERENCES documents(id)     ON DELETE CASCADE,
+  linked_by   UUID NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX ux_bid_documents_bid_doc ON bid_documents (bid_id, document_id);
+CREATE INDEX idx_bid_documents_bid ON bid_documents (bid_id);
+CREATE INDEX idx_bid_documents_doc ON bid_documents (document_id);
 
 -- ─────────────────────────────────────────────────────────────────
 -- 7. ORDERS & DELIVERY

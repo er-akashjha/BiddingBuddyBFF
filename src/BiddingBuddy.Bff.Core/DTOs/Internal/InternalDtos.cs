@@ -88,6 +88,8 @@ public record UpsertAiAnalysisDto(
 /// The BFF uses it to flip the tender to awarded, resolve org bids (won/lost), and notify trackers —
 /// all from its own Postgres tracking tables (the generic ladder stays in Mongo).
 /// </summary>
+/// <param name="CategoryRaw">Category as the awarded listing printed it — lets a competitor alert
+/// name the space without a Mongo round-trip.</param>
 public record TenderAwardedDto(
     string Platform,
     string GemTenderId,
@@ -95,7 +97,8 @@ public record TenderAwardedDto(
     int ParticipantCount,
     DateTimeOffset? ScrapedAt,
     AwardWinnerDto? Winner,
-    IReadOnlyList<AwardBidderDto>? Bidders
+    IReadOnlyList<AwardBidderDto>? Bidders,
+    string? CategoryRaw = null
 );
 
 public record AwardWinnerDto(
@@ -103,13 +106,18 @@ public record AwardWinnerDto(
     decimal? Price,
     string? Rank,
     bool IsMse,
-    string? Confidence
+    string? Confidence,
+    bool UnderPma = false
 );
 
+/// <param name="IsQualified">False means DISQUALIFIED — a compliance failure, not a pricing one.
+/// The two carry completely different lessons, so the loss reason must distinguish them.</param>
 public record AwardBidderDto(
     string SellerName,
     int? RankNumber,
     string? Status,
     decimal? TotalPrice,
-    bool IsQualified
+    bool IsQualified,
+    bool IsMse = false,
+    bool UnderPma = false
 );

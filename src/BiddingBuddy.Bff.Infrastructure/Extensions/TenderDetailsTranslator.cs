@@ -69,7 +69,9 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                 // Previously dropped — now surfaced to the UI.
                 SourceUrl:        tender.Source?.SourceUrl,
                 TechnicalSpecifications: tender.TechnicalSpecifications,
-                Platform:         tender.Source?.Platform);
+                Platform:         tender.Source?.Platform,
+                BidKind:          TenderKind.Resolve(
+                                      tender.Source?.BidKind, tender.Source?.PlatformTenderId));
         }
 
 
@@ -106,7 +108,8 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                     WinProbability: 0,   // not available in TenderSearchItemDto
                     IsTracked:     false, // not available at this stage
                     IsSaved:       false, // not available at this stage
-                    Platform:      item.Source?.Platform
+                    Platform:      item.Source?.Platform,
+                    BidKind:       TenderKind.Resolve(item.Source?.BidKind, gemId)
                 );
 
                 tenderList.Add(dto); // include all tenders regardless of title

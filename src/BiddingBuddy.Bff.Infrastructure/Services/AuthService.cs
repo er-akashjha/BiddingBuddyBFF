@@ -683,7 +683,8 @@ public class AuthService(
         foreach (var org in orgs)
         {
             var role = await orgRepo.GetUserRoleAsync(org.Id, userId, ct) ?? "viewer";
-            result.Add(new UserOrgDto(org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive, org.PrimaryCategory));
+            result.Add(new UserOrgDto(
+                org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive, org.PrimaryCategory, org.GemSellerName));
         }
         return result;
     }

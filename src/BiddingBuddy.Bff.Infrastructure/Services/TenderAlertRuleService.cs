@@ -71,6 +71,13 @@ public class TenderAlertRuleService(BffDbContext db) : ITenderAlertRuleService
 
     public async Task<OrgAlertSettingsDto> UpdateSettingsAsync(Guid orgId, UpdateOrgAlertSettingsDto dto, CancellationToken ct = default)
     {
+        // Validate up front: a rejected value must leave no half-applied row behind, and a
+        // bad channel alongside a good role must persist neither.
+        var channels = dto.NotifyChannels is null
+            ? null : ValidateSet(dto.NotifyChannels, TenderDigestChannel.Supported, "notifyChannels");
+        var roles = dto.NotifyRoles is null
+            ? null : ValidateSet(dto.NotifyRoles, OrgAlertRole.All, "notifyRoles");
+
         var s = await db.OrgAlertSettings.FirstOrDefaultAsync(x => x.OrgId == orgId, ct);
         if (s is null)
         {
@@ -81,8 +88,8 @@ public class TenderAlertRuleService(BffDbContext db) : ITenderAlertRuleService
         if (dto.IsEnabled.HasValue) s.IsEnabled = dto.IsEnabled.Value;
         if (dto.DigestSize.HasValue) s.DigestSize = Math.Clamp(dto.DigestSize.Value, 1, 50);
         if (dto.MinSendIntervalMinutes.HasValue) s.MinSendIntervalMinutes = Math.Clamp(dto.MinSendIntervalMinutes.Value, 15, 10080);
-        if (dto.NotifyChannels is not null) s.NotifyChannels = dto.NotifyChannels;
-        if (dto.NotifyRoles is not null) s.NotifyRoles = dto.NotifyRoles;
+        if (channels is not null) s.NotifyChannels = channels;
+        if (roles is not null) s.NotifyRoles = roles;
 
         await db.SaveChangesAsync(ct);
         return MapSettings(s);
@@ -96,6 +103,37 @@ public class TenderAlertRuleService(BffDbContext db) : ITenderAlertRuleService
         if (values is null) return null;
         var cleaned = values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim()).ToArray();
         return cleaned.Length == 0 ? null : cleaned;
+    }
+
+    /// <summary>
+    /// Check a settings array against the values the digest path actually honours, returning
+    /// the canonical spelling of each. Unlike <see cref="Normalize"/>, empty is an error rather
+    /// than "ignore": these arrays are the recipient list, so an empty one means "deliver
+    /// nowhere" — the exact silent failure this guard exists to stop.
+    /// </summary>
+    private static string[] ValidateSet(string[] values, string[] allowed, string field)
+    {
+        var cleaned = new List<string>();
+        foreach (var raw in values)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var value = raw.Trim();
+
+            // Match case-insensitively but store the canonical constant: dispatch compares
+            // ordinally, so "email" would otherwise be saved happily and then match nothing.
+            var canonical = allowed.FirstOrDefault(a => string.Equals(a, value, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException(
+                    $"{field}: '{value}' is not supported. Allowed values: {string.Join(", ", allowed)}.", field);
+
+            if (!cleaned.Contains(canonical)) cleaned.Add(canonical);
+        }
+
+        if (cleaned.Count == 0)
+            throw new ArgumentException(
+                $"{field} must contain at least one of: {string.Join(", ", allowed)}. " +
+                "To stop digests entirely, set isEnabled to false.", field);
+
+        return [.. cleaned];
     }
 
     private static TenderAlertRuleDto Map(TenderAlertRule r) => new(

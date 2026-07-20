@@ -181,6 +181,44 @@ builder.Services.AddExceptionHandler<BiddingBuddy.Bff.Api.Middleware.GlobalExcep
 // ── Build ─────────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
+// ── Schema migrations ─────────────────────────────────────────────────────────
+// Apply pending migrations before serving traffic. These used to be a manual
+// `POST /internal/migrations` after every deploy, which was forgotten more than
+// once — the entity model then maps a column the database does not have, and EF
+// fails on the first INSERT/SELECT that touches it. The user-visible symptom is
+// an opaque 500 ("An error occurred while saving the entity changes"), and the
+// worst-hit endpoint is POST /api/organizations: onboarding, i.e. every brand
+// new signup. Doing this at startup makes "deploy" and "migrate" one step.
+//
+// Safe to run every boot: scripts are idempotent, applied in filename order, and
+// each one commits with its schema_migrations row in a single transaction.
+// Set Database:AutoMigrateOnStartup=false to opt out (e.g. to gate a risky
+// migration behind a manual window).
+if (app.Configuration.GetValue("Database:AutoMigrateOnStartup", true))
+{
+    using var migrationScope = app.Services.CreateScope();
+    var migrator = migrationScope.ServiceProvider.GetRequiredService<BiddingBuddy.Bff.Core.Interfaces.IDbMigrator>();
+    try
+    {
+        var result = await migrator.ApplyPendingAsync();
+        if (result.Applied.Count > 0)
+            Log.Information("[Migrations] Applied {Count} pending migration(s): {Names}",
+                result.Applied.Count, string.Join(", ", result.Applied));
+        else
+            Log.Information("[Migrations] Schema up to date ({Count} scripts already applied).",
+                result.AlreadyApplied.Count);
+    }
+    catch (Exception ex)
+    {
+        // Deliberately non-fatal. A crash-looping container takes the whole site
+        // down; a schema that is behind only breaks the features touching the new
+        // columns. Log at Critical so the alert fires and the deploy is not
+        // mistaken for clean.
+        Log.Fatal(ex, "[Migrations] FAILED to apply pending migrations — the schema may be behind the "
+                    + "entity model. Endpoints touching new columns will return 500 until this is resolved.");
+    }
+}
+
 // Correlation id must come first — before anything else logs — so every entry
 // produced during the request (and the request-logging summary below) carries it.
 app.UseMiddleware<CorrelationIdMiddleware>();

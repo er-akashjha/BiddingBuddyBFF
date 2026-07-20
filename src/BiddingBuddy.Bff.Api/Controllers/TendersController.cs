@@ -1,5 +1,6 @@
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Interfaces;
+using BiddingBuddy.Bff.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,6 +13,7 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 public class TendersController(
     ITenderService tenderService,
     IBiddingBuddyServicesClient servicesClient,
+    IOrganizationService organizations,
     ITenderFileStorage tenderFileStorage) : BffControllerBase
 {
     /// <summary>Tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
@@ -115,11 +117,12 @@ public class TendersController(
 
     /// <summary>
     /// Award result (winner + full competitive price ladder) for a tender, proxied from
-    /// BiddingBuddyServices. 404 until the gem-results pipeline has recorded an award. The route
-    /// carries the Mongo id, so we resolve the platform + platform-tender-id off the raw tender first.
+    /// BiddingBuddyServices, plus the caller-org's own position on that ladder. 404 until the
+    /// gem-results pipeline has recorded an award. The route carries the Mongo id, so we resolve
+    /// the platform + platform-tender-id off the raw tender first.
     /// </summary>
     [HttpGet("{id:guid}/result")]
-    [ProducesResponseType(typeof(TenderResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(TenderResultViewDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> GetResult(Guid id, CancellationToken ct)
@@ -131,7 +134,10 @@ public class TendersController(
             return NotFound();
 
         var result = await servicesClient.GetTenderResultAsync(platform!, platformTenderId!, ct);
-        return result is null ? NotFound() : Ok(result);
+        if (result is null) return NotFound();
+
+        var org = await organizations.GetAsync(CurrentOrgId, CurrentUserId, ct);
+        return Ok(TenderResultView.Build(result, org.GemSellerName, org.Name));
     }
 
     /// <summary>Save a tender to the org with optional notes, tags and custom score.</summary>

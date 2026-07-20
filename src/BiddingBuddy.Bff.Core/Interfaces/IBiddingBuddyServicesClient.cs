@@ -46,6 +46,27 @@ public interface IBiddingBuddyServicesClient
     /// <summary>The award result for a tender (winner + ladder), or null if not awarded yet.</summary>
     Task<TenderResultDto?> GetTenderResultAsync(string platform, string platformTenderId, CancellationToken ct = default);
 
-    /// <summary>Aggregate market pricing/competition stats over awards for a category/state slice.</summary>
-    Task<MarketPricingStatsDto> GetMarketPricingAsync(string? category, string? state, CancellationToken ct = default);
+    /// <summary>Aggregate market pricing/competition stats over awards for a slice.</summary>
+    Task<MarketPricingStatsDto> GetMarketPricingAsync(MarketFilterDto filter, CancellationToken ct = default);
+
+    /// <summary>Winning-price stats bucketed by category|state|month|seller|buyer.</summary>
+    Task<List<MarketGroupBucketDto>> GetMarketGroupedAsync(
+        MarketFilterDto filter, string groupBy, int limit, CancellationToken ct = default);
+
+    /// <summary>Top sellers by wins for the slice.</summary>
+    Task<List<SellerStatsDto>> GetTopSellersAsync(MarketFilterDto filter, int limit, CancellationToken ct = default);
+
+    /// <summary>Award history for one seller (by display name — normalized in Services).</summary>
+    Task<SellerStatsDto?> GetSellerStatsAsync(string seller, CancellationToken ct = default);
+
+    /// <summary>Head-to-head records between one seller and every rival it has faced.</summary>
+    Task<List<HeadToHeadRecordDto>> GetHeadToHeadAsync(
+        string seller, MarketFilterDto filter, int limit, CancellationToken ct = default);
+
+    /// <summary>Award behaviour for one buyer.</summary>
+    Task<BuyerProfileDto?> GetBuyerProfileAsync(string buyer, CancellationToken ct = default);
+
+    /// <summary>Comparable past awards for a live tender.</summary>
+    Task<List<TenderResultDto>> GetComparableAwardsAsync(
+        string? category, string? state, decimal? estimatedValue, int limit, CancellationToken ct = default);
 }

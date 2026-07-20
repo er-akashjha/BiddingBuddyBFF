@@ -1,10 +1,419 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v15**
+Current version: **v26**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v26 — 2026-07-18 15:08 IST
+
+**Fix: workspace creation 500'd on a foreign-key violation — EF was inserting the member before
+the organization.** This is the actual cause of the onboarding outage. v24 blamed an unapplied
+migration `0024`; that was wrong. Production logs show `gem_seller_name` present, all 26 migrations
+applied, and the real error:
+
+```
+23503: insert or update on table "org_members"
+       violates foreign key constraint "org_members_org_id_fkey"
+
+INSERT INTO org_members (... org_id ...)   ← emitted FIRST
+INSERT INTO organizations (...)            ← emitted SECOND
+```
+
+`CreateAsync` built the owner row with `OrgId = org.Id`, read **before** `SaveChangesAsync`.
+`organizations.id` is store-generated (`HasDefaultValueSql("gen_random_uuid()")`), so at that point
+the value is not a usable key — and assigning the raw scalar left EF with no relationship between
+the two tracked entities. With no edge in its insert-ordering graph, EF was free to emit
+`org_members` first, and Postgres rejected the orphan FK. Every workspace creation failed.
+
+Fixed by linking through the navigation (`Organization = org`) instead of copying the scalar. EF
+then orders `organizations` first and propagates the real generated id. Both rows still go in one
+`SaveChangesAsync`, so an org can never exist without its owner.
+
+**Same defect fixed in `BidService.CreateAsync`** (`BidActivity.BidId = bid.Id` before the save,
+against `bid_activities_bid_id_fkey`) — latent, identical shape, would fail `POST /api/bids` the
+same way. `CloseChecklistItemAsync` was checked and is **correct**: it sets
+`Id = Guid.NewGuid()` explicitly, so its key is real before the save.
+
+### Why the test suite did not catch this
+
+All 140 tests use `UseInMemoryDatabase`, which enforces **neither foreign keys nor insert
+ordering** — the two things that actually broke. The suite was green throughout the outage and
+stays green after the fix, so it offers no signal here either way. Any future test covering
+relational integrity on this path needs a real PostgreSQL (Testcontainers) or at minimum SQLite
+with FK enforcement on.
+
+### Note on v24
+
+The startup auto-migration added in v24 is unrelated to this bug and stays — it is still a real
+improvement, and its log line (`Schema up to date (26 scripts already applied)`) is what proved the
+migration theory wrong. But it fixed nothing, and `database/schema.sql` had genuinely drifted, which
+made a plausible-looking wrong answer easy to reach. Prefer the production log over schema
+inference next time.
+
+## v25 — 2026-07-18 11:56 IST
+
+**The sector picked at onboarding now actually does something.**
+
+`organizations.primary_category` was write-only: set by onboarding, echoed in `OrgDetailDto` and
+`/api/auth/me`, and read by no logic anywhere. Real alerting runs off `tender_alert_rules` +
+`MatchingService`, which never looked at it. So the onboarding page's promise — *"We'll surface the
+most relevant government tenders for you right away"* — resolved to nothing, and a new org got zero
+tender alerts until someone found Settings → Interests and built a rule by hand.
+
+`OrganizationService` now seeds **one category-only `tender_alert_rules` row** from the sector:
+
+- on `POST /api/organizations`, when the payload carries a sector;
+- on `PATCH /api/organizations/{id}`, only when the sector is **first** set — which is the path that
+  matters for social signups, since `AuthService` creates the org with a name only and onboarding
+  PATCHes the sector in afterwards.
+
+**This is only safe because of ui v20.** The picker now emits the canonical 40-entry taxonomy
+verbatim — the same vocabulary the pipeline assigns to `tenders.category`. `MatchingService` compares
+categories with full-string `OrdinalIgnoreCase` (no substring, no stemming), so the free-form labels
+the picker used to emit would have produced a rule matching **zero tenders, silently, forever**. Do
+not reintroduce hand-typed sectors upstream of this.
+
+**Idempotent by "org owns no rules yet".** `tender_alert_rules` has no unique constraint, so a
+repeat call would otherwise just append a duplicate the user has to find and delete. Seeding is
+skipped entirely if the org already owns any rule, and a later sector *change* does not re-seed —
+once interests exist they are the user's to curate, and quietly widening someone's feed is worse
+than doing nothing.
+
+**Failure is non-fatal**, matching the notification-publish contract elsewhere in the class: the org
+and sector are already committed, so a seeding error logs a warning and onboarding still succeeds.
+
+### On the first digest — deliberately immediate, and it cannot flood
+
+A brand-new org has no `org_alert_settings` row, so `last_digest_sent_at` is NULL and the 6 h
+cooldown gate does not trip: the first digest goes out on the next scan tick (≤15 min) rather than
+6 h later. That is the behaviour we want — it *is* the "right away" the page promises — and it is
+bounded, because `ScanNewTendersAsync` only ever evaluates tenders with `alerts_scanned_at IS NULL`.
+There is no backlog to blast, only newly-ingested tenders, and the recipient list for a fresh org is
+just the owner. No settings row is created; the lazy defaults (enabled, 360 min, Email+InApp) are
+already correct, and writing one would only duplicate them.
+
+**Known limit — the flip side of the same mechanism.** Because matching is forward-only, an org
+signing up at midday sees nothing until new tenders in its sector are ingested, i.e. after the
+downloader's next nightly run. "Right away" is really "as soon as new tenders arrive". Closing that
+gap means re-arming already-scanned tenders, which is a **global** operation
+(`POST /internal/matching/scan?backfill=true` re-arms every tender for every org) — deliberately not
+done here. A scoped `UPDATE tenders SET alerts_scanned_at = NULL WHERE category = '<sector>'` is the
+narrower option, but it still re-arms that category for *all* orgs, so it needs its own decision.
+
+No schema change — `tender_alert_rules` and `org_alert_settings` already exist (migrations `0004`,
+`0011`). Pure data path; nothing to migrate.
+
+Covered by `tests/BiddingBuddy.Bff.Tests/Orgs/StarterAlertRuleSeedingTests.cs` (9 tests: both seed
+paths, category verbatim + no invented constraints, the three no-seed cases, and both idempotency
+guards).
+
+## v24 — 2026-07-18 11:39 IST
+
+**Fix: every new signup got a 500 on "Create workspace" — migrations now apply on startup.**
+
+`POST /api/organizations` failed for 100% of new users with `An error occurred while saving the
+entity changes`, and the SPA showed "Could not create your workspace." Root cause was **migration
+`0024_add_org_gem_seller_name.sql` never being applied in prod**. v22 added `GemSellerName` to the
+`Organization` entity + configuration, so EF emits `gem_seller_name` in the INSERT column list
+unconditionally (it has no `HasDefaultValueSql`) — Postgres answered `42703 undefined_column` and EF
+wrapped it in the opaque `DbUpdateException` above. The payload was irrelevant: the UI never sends
+the field. Onboarding was simply the first request to touch `organizations`; `GetAsync` does a full
+entity load, so the read-back on line 54 of `OrganizationService` would have failed even if the
+INSERT had succeeded.
+
+Migrations were manual (`POST /internal/migrations` after each rebuild) and had been missed across
+several releases — the v18/v22 notes flag `0023`/`0024` as outstanding. **The BFF now applies pending
+migrations on startup**, before it serves traffic, so deploy and migrate are one step. This is safe
+to run every boot: scripts are idempotent, ordered by filename, and each commits with its
+`schema_migrations` row in a single transaction.
+
+- Failure is **deliberately non-fatal** — it logs at `Fatal` and continues. A crash-looping container
+  takes the whole site down; a schema that is behind only breaks the endpoints touching new columns.
+- Opt out with `Database:AutoMigrateOnStartup=false` to gate a risky migration behind a manual window.
+
+Deploying this build applies `0023`–`0027` automatically. No manual curl required.
+
+## v23 — 2026-07-16 20:30 IST
+
+**Fix: clearing the GeM seller name silently did nothing.** `UpdateAsync` assigns every field behind
+`if (dto.X is not null)`, so `null` means "not supplied" for all fifteen of them — but the GeM
+identity card (ui v16) sends `null` to mean *clear*. The clear was dropped, the endpoint returned
+the **unchanged** org, and the SPA wrote the old value straight back into auth state and reported
+success. The field looked empty until reload, then the old name came back.
+
+It matters because that name is free text on GeM's side: a typo means "we never find you on a
+ladder", and the org-name fallback in `MarketController`/`TendersController` only applies while the
+field is blank. So a user who typo'd it — the very failure the card's "Check against GeM results"
+button exists to surface — **could not clear it to get the default back**, short of retyping their
+org name by hand. Until they did, their bids never auto-resolved to won/lost.
+
+- **Blank, not null, is the clear signal** for `GemSellerId`/`GemSellerName`. Whitespace counts as
+  blank (a cleared input is not a name), and values are trimmed — stray whitespace is invisible on
+  screen but is a different `SellerKey`, i.e. the same silent "we never find you" by another route.
+- **`null` still means "not supplied"** for every field on `UpdateOrgDto`, so a caller patching only
+  the website cannot wipe an org's GeM identity. The convention is preserved, not replaced — this
+  DTO has no way to distinguish omitted from explicit-null, and the two GeM fields are the only ones
+  a user has a real reason to unset.
+- Paired with **bidding-buddy-ui v19**, which sends blank instead of null. No migration.
+- 7 tests in `Orgs/GemSellerIdentityUpdateTests.cs`; full suite green at **131**.
+
+---
+
+## v22 — 2026-07-16 20:02 IST
+
+**Tender list + detail now report `bidKind`, so the UI can flag reverse auctions.** A production
+check found 5,190 GeM reverse auctions that were indistinguishable from ordinary tenders — and
+title-less, which made them look like broken records rather than a different kind of thing
+(pipeline fix: BidProcessor v10).
+
+- `TenderListItemDto.BidKind` + `TenderDetailDto.BidKind` (optional, trailing — existing callers
+  unaffected), populated in `TenderDetailsTranslator` for both `ToListDto` and `ToDetailsDto`.
+- `TenderSourceDto.BidKind` reads Mongo's new `source.bidKind` (Services v7).
+- New `TenderKind.Resolve(stored, platformTenderId)` — **stored value wins; otherwise the kind is
+  re-derived from the bid number**, which GeM has always encoded. That is what makes the badge work
+  for the 5,190 tenders already in Mongo without waiting on a backfill.
+
+**No migration.** Tender list and detail proxy Mongo via BiddingBuddyServices — Postgres `tenders`
+is never read on this path — so the flag needs no column. Postgres would only be required if
+`bidKind` had to drive interest matching or award resolution, which it doesn't today.
+
+Not the same concept as `Commercial.ReverseAuction.Enabled`, which is AI-inferred, means "this bid
+has an RA phase", and is unset on actual reverse auctions because the AI never runs on them.
+
+**Side effect worth knowing:** reverse auctions now arrive with real titles, so `HasPlaceholderTitle`
+no longer classifies them as stubs and their award mail is no longer suppressed. Recipients are
+still scoped to bidders ∪ trackers/savers, so only people who engaged with the tender get mail.
+
+## v21 — 2026-07-16 17:55 IST
+
+**Fix: digest channels/roles that deliver nothing are rejected at save time instead of accepted** —
+`PATCH /api/tender-alert-rules/settings` assigned `notify_channels`/`notify_roles` straight onto the
+row with no validation, and both columns are bare `text[]` with no CHECK. But
+`MatchingService.DispatchDigestAsync` only builds recipients for `Email` and `InApp`, and resolves
+people via `roles.Contains(member.Role)` — so a value neither side implements doesn't error, it
+yields zero recipients and `continue`s. An org that saved `["WhatsApp"]` or `["Sms"]` — both real
+`NotificationChannel` constants, so they look legitimate — **silently stopped receiving tender
+digests altogether**, with no error at save time and nothing in the UI to show it. No migration; the
+guard is on the write path, so rows already in `org_alert_settings` are untouched.
+
+- **`UpdateSettingsAsync` validates both arrays** against `TenderDigestChannel.Supported` and
+  `OrgAlertRole.All` (new, in `Core/DTOs/Alerts`), returning **400** through the existing
+  `GlobalExceptionHandler` `ArgumentException` mapping — no controller change. The channel allowlist
+  is deliberately **not** `NotificationChannel`: that class lists all five channels the notification
+  subsystem knows about, so validating against it would have waved `Sms`/`WhatsApp`/`Firebase`
+  through and kept the bug. It mirrors the branches dispatch actually implements.
+- **Empty arrays are rejected too**, not just unknown values — `[]` is the one path the SPA can
+  already reach today. The Interests tab lets you toggle both channel switches off, which saved `[]`
+  and broke that org's digests on the spot. `isEnabled=false` is the real "stop sending" control,
+  and the error message points at it.
+- **Values are canonicalised, not merely checked.** Dispatch compares ordinally, so `"email"` would
+  save happily and then match nothing — the same silent drop by another route. Casing is normalised
+  to the constant (`email` → `Email`, `Owner` → `owner`), blanks dropped, duplicates collapsed.
+  Channels are PascalCase while roles are lowercase, which is exactly what a hand-written call gets
+  wrong.
+- **Validation runs before any DB work**, so a rejected call leaves no half-applied row — a bad
+  channel sent alongside a good `isEnabled` was previously prevented only by the throw happening to
+  land before `SaveChangesAsync`.
+- **Dispatch logs undeliverable channels instead of skipping in silence.** Save-time validation
+  can't heal rows written before it, so `DispatchDigestAsync` now warns when an org's channels
+  include something it doesn't implement. It's also the tripwire if `Supported` ever gains a channel
+  without a matching dispatch branch.
+- 24 tests in `Alerts/OrgAlertSettingsValidationTests.cs`, **19 of which fail against the previous
+  code**. Full suite green at 111.
+
+**Not in scope:** `docs/whatsapp-alerts/PLAN.md` plans to make `WhatsApp` genuinely deliverable
+here. That lands by adding the dispatch branch and the `TenderDigestChannel.Supported` entry in the
+same change; until then the value is rejected rather than accepted-and-dropped.
+
+---
+
+## v20 — 2026-07-16 21:50 IST
+
+**Tender-match alerts are clickable again (migration `0027`)** — clicking a TENDER_MATCH row in the
+Alert Center or the TopNav bell navigated nowhere. The SPA builds a notification's link purely from
+`entity_type`/`entity_id` (`entityUrl()` in `NotificationsContext.tsx`); TENDER_MATCH landed with
+`entity_type` NULL, so the row had no link to offer. Data-only fix — no schema change.
+
+- **How it broke.** `0012` set the InApp template's metadata to `{"actionUrl":"/tenders?matched=1"}`,
+  which nothing has ever read — `user_notifications` has no `action_url` column, and the SPA does not
+  look at `actionUrl`. `0015` then overwrote the metadata wholesale with `{orgId,type}` so the digest
+  would persist to the inbox at all, dropping the (already-dead) actionUrl and never adding an
+  `entityType`. Every sibling seeded in `0015` carries one; TENDER_MATCH was the only tender template
+  without.
+- **`0027` sets `entityType: tender` + `entityId: {{EntityId}}`**, matching `TENDER_AMENDED`'s shape
+  exactly — same `tender_alert` type, same entity. Keys are **lowercase deliberately**:
+  `InAppNotificationSender` does a case-sensitive `md.TryGetValue("entityType")` over a plain
+  `Dictionary<string,string>`, so an `EntityType` spelling would silently miss and leave
+  `entity_type` NULL — i.e. reproduce this exact bug.
+- **Updates the Firebase (push) row too, not just InApp.** `0020` seeds the push template by *cloning*
+  InApp's metadata, so it inherited the same gap — and as an `INSERT … ON CONFLICT DO NOTHING` that
+  has already run, it would never re-clone the fix. The mobile app reads `entityType`/`entityId`
+  straight out of the FCM data payload (`deepLinks.ts`), so push taps needed it as well. Ordering is
+  safe either way: `0020` sorts before `0027`, so a not-yet-applied `0020` still clones first and gets
+  corrected in the same batch.
+- **`MatchingService.DispatchDigestAsync` now supplies `EntityId`** — but only for a **single-tender**
+  digest. A digest groups N tenders under one notification, so there is no single entity to name when
+  N > 1; it renders empty and the clients fall back to the `/tenders` list. Empty is also what
+  non-Guid-shaped `mongo_tender_id` values produce, since `user_notifications.entity_id` is `uuid` —
+  the same `Guid.TryParse`-or-empty contract the other tender templates already use via
+  `InternalPipelineService`. Both cases are safe: the sender's `Guid.TryParse` drops them to NULL.
+- **Verified** by replaying the real template history (`0002` → `0012` → `0015` → `0020`) on a
+  throwaway Postgres: reproduced `entity_type` NULL on both InApp and Firebase, applied `0027`
+  (`UPDATE 2`), confirmed both rows end byte-identical to `TENDER_AMENDED`, and re-ran it to prove
+  idempotency.
+- **Deploy:** migrations are manual — `POST /internal/migrations` with `X-Api-Key` after the rebuild.
+  Existing `user_notifications` rows are **not** backfilled; already-delivered alerts stay unclickable.
+
+---
+
+## v19 — 2026-07-16 21:45 IST
+
+**Security: close a cross-tenant read in the document vault** — a member of org A could read org B's
+files. `DocumentsController.RequestUploadUrl` builds the object key server-side
+(`orgs/{orgId}/docs/{guid}/{file}`) precisely so a client can't choose it, but registration took
+`dto.S3Key` back from the client and stored it verbatim. `POST /api/documents` with an `s3Key`
+belonging to another org produced a row in *your* org that `GET /{id}/view-url` and
+`/{id}/download-url` would then happily presign — the presign step only ever looks at the key on the
+row, and the row passed its own org check. No migration; the guard is on the write path, so rows
+already in `documents` are untouched.
+
+- **`CreateDocumentAsync` now re-checks the org prefix**, the same guard
+  `BidAttachmentService.RegisterAsync` already applies to bid attachments. Rejects a blank key, a key
+  outside `orgs/{orgId}/docs/`, and — beyond the bid-attachment version — a key containing `..`,
+  since `orgs/{mine}/docs/../../{theirs}/docs/x` passes a `StartsWith` test on its own.
+- **`AddVersionAsync` got the same guard.** It trusted `dto.S3Key` identically. Not exploitable
+  today only because nothing presigns a `document_versions` key — `GetVersionsAsync` returns the key
+  string, not a URL. That's an accident of the current read surface, not a control; the obvious next
+  feature ("download this version") would have made it live.
+- **Folder ids are now checked against the caller's org** in `CreateFolderAsync`, `UpdateFolderAsync`,
+  `CreateDocumentAsync`, and `UpdateDocumentAsync` (the last also moves a doc via `dto.FolderId`).
+  Cross-org ids report **404, not 403**, so the response can't enumerate other orgs' folder ids.
+- **`CreateFolderAsync` no longer swallows its own insert.** `SaveChangesAsync` was wrapped in
+  `try { } catch (Exception er) { }` — an empty catch, and the solution's only build warning. A failed
+  insert returned **200** with a `FolderDto` whose `Id` the SPA added to its sidebar, so the folder
+  existed on screen and nowhere else until reload. Failures now surface. The likely original motive —
+  an FK violation on a bogus `ParentId` — is what the ownership check above now answers cleanly.
+- **`UpdateFolderAsync` rejects cycles.** A folder could be made its own parent or its own descendant,
+  detaching the whole subtree from every root listing (`ListFolders` starts at `ParentId == null`) with
+  no UI to recover it. The check walks up from the proposed parent, capped at
+  `MaxFolderDepth = 64` — a cycle written *before* this guard would otherwise spin the walk forever, so
+  the cap is load-bearing, not decorative.
+
+Build clean (0 warnings); 87 tests green, 21 new in `Documents/DocumentServiceGuardTests.cs`. The 16
+negative tests were confirmed to fail against the pre-fix service, and the 5 happy-path tests to pass.
+
+---
+
+## v18 — 2026-07-16 21:30 IST
+
+**Award intelligence: market proxy, loss autopsy, and the competitor-won trigger**
+(plan: root `docs/tender-results/UI-FEATURES.md`). **Needs migration `0025`.**
+
+### Seller matching now uses the canonical key
+`NormalizeSeller` stopped at casing/punctuation, so an org named "ABC Pvt Ltd" **never** matched a
+ladder row printed "ABC Private Limited" — and won/lost resolution silently fell through to the
+bid-value heuristic. It now delegates to the new `Services/SellerKey.cs`, the same algorithm
+Services computes and indexes at ingest.
+⚠ **KEEP IN SYNC** with `BiddingBuddyServices/src/BiddingBuddy.Core/Domain/SellerKey.cs` — if the two
+drift, an org matches in market analytics but not in its own bid resolution.
+
+### Loss autopsy — three failures, three different lessons
+`BuildLossReason` no longer flattens everything to "Ranked Ln — awarded to X". The ladder
+distinguishes:
+- **disqualified** → a compliance/paperwork failure; price was never the issue, and cutting margin
+  next time fixes nothing;
+- **lost on preference** → L1 held an MSE/PMA advantage we don't have, so the gap may not be
+  closeable on price at all;
+- **outbid** → a real pricing loss, now quantified ("₹X / Y% below your bid").
+
+Same taxonomy is exposed structurally to the SPA — see `TenderResultViewDto` below.
+
+### `GET /api/tenders/{id}/result` now answers "where were WE?"
+Returns `TenderResultViewDto` = the ladder + `YourRow` + `YourOutcome` (verdict, loss kind, rank,
+gap, gap %). Resolved **server-side** by new `Services/TenderResultView.cs` because it needs
+`SellerKey`: a TypeScript copy would be a third implementation that drifts, and a user's row would
+highlight on one screen but not another. Identity = `gem_seller_name`, else the org name (the same
+precedence the award pipeline uses, so the two never disagree about who we are).
+
+### `MarketController` — the real intelligence surface
+`pricing` (now percentile-based + MSE/RA rates), plus new `grouped`, `sellers`, `sellers/profile`,
+`head-to-head` (the caller's org, 409 `SELLER_IDENTITY_NOT_SET` when unconfigured rather than a
+misleading empty list), `head-to-head/{seller}`, `buyer`, `comparables`. All proxy Services' Mongo
+aggregation — **no result data in Postgres**, per the standing principle.
+
+### COMPETITOR_WON — the trigger that didn't exist
+The notification catalog listed "competitor-spotted" as deferred *because no trigger existed*:
+nothing in the product ever knew who won anything. The award feed is that trigger, and the
+`competitors` table was always the audience. `NotifyCompetitorWinAsync` fires when a tracked
+competitor is the inferred winner — matched on the normalized key, claimed once per (tender, org)
+so a re-scrape can't re-send, suppressed for stub tenders (same reasoning as award mail), and
+wrapped so it can never fail the pipeline. Template seeded by **migration `0025`**.
+
+### Also
+`/api/auth/me` now carries `GemSellerName` per org (like `PrimaryCategory`) — every award surface
+needs it, and re-fetching the org on each would be silly.
+
+Tests: `SellerKeyTests` + `TenderResultViewTests` (**+30**, 66 green). The seller-key suite caught a
+real bug: "M S Dhoni Sports" was being mangled to "dhoni sports" because the `M/S` prefix check ran
+*after* punctuation stripping, which made a Messrs prefix indistinguishable from genuine initials.
+The prefix is now matched on the raw string, where the slash still disambiguates it.
+
+---
+
+## v17 — 2026-07-16 18:40 IST
+
+**Bid documents: link org vault documents to a bid** — the bid's Documents tab had a real backend
+(`bid_attachments`, since v?/BID-303) but no way to attach anything you'd already uploaded. The vault
+(`/api/documents`) and bids were two disconnected file systems: `bid_attachments` owns its own
+`storage_key` and has no `document_id`, so "attach an existing document" needed new schema either way.
+
+- **New `bid_documents` link table** (migration `0026`) — `(org_id, bid_id, document_id, linked_by)`,
+  UNIQUE on `(bid_id, document_id)`. A **link, not a copy**: `documents.folder_id` is a single FK, so
+  filing a doc into a per-bid folder would move it out of GST/PAN *and* allow it on only one bid.
+  Linking keeps one GST certificate in the vault serving every bid that needs it, so re-uploading it
+  updates all of them. Both FKs cascade — unlinking is implicit when the bid or the document dies.
+- **New endpoints on `BidsController`:**
+  - `GET /api/bids/{id}/documents` — the bid's folder, newest first. A **union** of linked vault docs
+    (`source: "vault"`) and task-completion attachments (`source: "attachment"`), discriminated by
+    `source` because they download through different endpoints.
+  - `POST /api/bids/{id}/documents` `{ documentId }` — link. Idempotent; re-linking returns the
+    existing row. Scoping the document lookup to the caller's org is what blocks cross-org linking.
+  - `DELETE /api/bids/{id}/documents/{documentId}` — unlink. The vault document is untouched.
+- **Orphaned attachments are now reachable.** The list returns *every* `bid_attachments` row for the
+  bid, not just the comment-linked ones the Notes feed shows. Only `CompleteChecklistItemAsync` ever
+  sets `comment_id`, so an attachment registered without that follow-up call was previously stranded in
+  R2 + Postgres with no read path at all.
+- Added `idx_documents_folder` — `documents.folder_id` had never been indexed (only `org_id` and
+  `expiry_date`), so every folder filter was a per-org seq scan.
+
+Deploy: apply migration `0026` (`POST /internal/migrations`) after rolling the BFF, per the usual
+manual-migration step.
+
+---
+
+## v16 — 2026-07-16 10:27 IST
+
+**Award mail: narrower audience + no mail for stub tenders** — kills two sources of "Result out:" noise
+reported from production. `ResolveBidsAndNotifyAsync` only; bid resolution and the `awarded` status flip
+are untouched and still run for every award.
+
+- **Interest-matched orgs no longer get award mail.** The recipient union drops `tender_matches` and is
+  now **bidders ∪ tracked/saved**. A `tender_matches` row only means the tender once matched an org's
+  saved interests, so every org received award mail for tenders nobody there ever opened, saved, or bid
+  on — and the query had no `status` filter, so even matches that were buffered but never delivered as a
+  digest still fired one. Interests continue to drive the `TENDER_MATCH` digest exactly as before.
+- **Stub tenders send nothing.** New `HasPlaceholderTitle` skips the notification when a tender's title
+  is blank or equals its bid number. BidProcessor's `BffTenderClient` mirrors the bid number into `title`
+  when enrichment produced none (the seed-only path: no document text, or a failed/degenerate AI run,
+  rescued by the portal seed floor — and GeM seeds carry no title). Those tenders reach Postgres with no
+  title, description, or documents, so the mail could only say `Result out: GEM/2026/R/694493` and
+  nothing else. Match is exact — a real title that merely *contains* its bid number still notifies.
+- **Consequence to know:** an org that bid on a stub tender gets no won/lost *email*. The bid is still
+  auto-resolved and shows in the Bids UI; only the notification is suppressed.
+- No migration. Build clean; 36 tests green (6 new, pinning the placeholder-title predicate).
+  `InternalsVisibleTo` added to `BiddingBuddy.Bff.Infrastructure` for the test project.
 
 ## v15 — 2026-07-12 09:30 IST
 

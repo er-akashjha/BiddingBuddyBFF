@@ -39,6 +39,7 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<BidChecklistItem> BidChecklistItems => Set<BidChecklistItem>();
     public DbSet<BidComment> BidComments => Set<BidComment>();
     public DbSet<BidAttachment> BidAttachments => Set<BidAttachment>();
+    public DbSet<BidDocument> BidDocuments => Set<BidDocument>();
 
     // Compliance
     public DbSet<ComplianceRequirement> ComplianceRequirements => Set<ComplianceRequirement>();

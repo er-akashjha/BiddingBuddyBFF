@@ -92,6 +92,7 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<ISavedFilterService, SavedFilterService>();
         services.AddScoped<IBidService, BidService>();
         services.AddScoped<IBidAttachmentService, BidAttachmentService>();
+        services.AddScoped<IBidDocumentService, BidDocumentService>();
         services.AddScoped<IComplianceService, ComplianceService>();
         services.AddScoped<IDocumentService, DocumentService>();
         services.AddScoped<IOrderService, OrderService>();
