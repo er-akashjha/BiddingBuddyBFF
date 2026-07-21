@@ -107,6 +107,12 @@ public static class InfrastructureServiceExtensions
         services.Configure<MatchingScanOptions>(config.GetSection(MatchingScanOptions.Section));
         services.AddScoped<IInternalPipelineService, InternalPipelineService>();
 
+        // GRANT product line
+        services.AddScoped<IInternalGrantPipelineService, InternalGrantPipelineService>();
+        // Same concrete client as IBiddingBuddyServicesClient so both share one cached JWT.
+        services.AddScoped<IGrantServicesClient>(sp =>
+            (BiddingBuddyServicesClient)sp.GetRequiredService<IBiddingBuddyServicesClient>());
+
         // Deadline / expiry reminder scan (bids, invoices, compliance, delivery, EMD)
         services.AddScoped<INotificationAudienceResolver, NotificationAudienceResolver>();
         services.AddScoped<IDeadlineScanService, DeadlineScanService>();

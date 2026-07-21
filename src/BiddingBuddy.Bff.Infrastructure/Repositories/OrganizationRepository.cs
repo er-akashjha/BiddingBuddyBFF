@@ -44,9 +44,23 @@ public class OrganizationRepository(BffDbContext db) : IOrganizationRepository
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// The gate <see cref="Api.Middleware.OrgContextMiddleware"/> uses to decide 403.
+    /// </summary>
+    /// <remarks>
+    /// The <c>o.IsActive</c> term must stay in lockstep with <see cref="FindByUserIdAsync"/>,
+    /// which backs <c>GET /api/auth/me</c>. These are the two answers to "which orgs can I
+    /// use", and they used to disagree: this checked only the membership row, so a
+    /// deactivated organization passed the gate while vanishing from the switcher. A client
+    /// reconciling its cached org against <c>/api/auth/me</c> would then move the user off an
+    /// org that in fact still worked — and the SPA now does exactly that on every 403.
+    /// </remarks>
     public Task<bool> IsUserMemberAsync(Guid orgId, Guid userId, CancellationToken ct = default)
         => db.OrgMembers.AnyAsync(
-            m => m.OrgId == orgId && m.UserId == userId && m.Status == "active", ct);
+            m => m.OrgId == orgId
+              && m.UserId == userId
+              && m.Status == "active"
+              && m.Organization.IsActive, ct);
 
     public async Task<string?> GetUserRoleAsync(Guid orgId, Guid userId, CancellationToken ct = default)
     {

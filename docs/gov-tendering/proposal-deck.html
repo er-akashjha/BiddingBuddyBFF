@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buyer-Side Tendering — Board Deck</title>
+
+<style>
+  :root {
+    --ground:      #FAFAF8;
+    --ground-sunk: #F1F1EE;
+    --panel:       #FFFFFF;
+    --ink:         #16192A;
+    --ink-soft:    #3D4356;
+    --slate:       #6B7186;
+    --rule:        #DEDDD6;
+    --rule-soft:   #EAE9E3;
+    --accent:      #2A3566;
+    --accent-soft: #E7E9F2;
+    --ok:          #2C6149;
+    --ok-bg:       #E4EFE9;
+    --warn:        #8A5D12;
+    --warn-bg:     #F6EBD6;
+    --crit:        #96352D;
+    --crit-bg:     #F6E3E0;
+    --idle:        #6B7186;
+    --idle-bg:     #EAE9E3;
+
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono:  "Cascadia Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+
+    --u: clamp(9px, 1.05vw, 15px);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #14151C; --ground-sunk: #1B1D26; --panel: #1A1C25;
+      --ink: #E9E9EE; --ink-soft: #C2C4CF; --slate: #9297A8;
+      --rule: #32343F; --rule-soft: #262832;
+      --accent: #9FAEE8; --accent-soft: #23273A;
+      --ok: #7EC0A0; --ok-bg: #1B2A24;
+      --warn: #D9AC63; --warn-bg: #2B2318;
+      --crit: #DE9188; --crit-bg: #2C1D1B;
+      --idle: #9297A8; --idle-bg: #23252E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #14151C; --ground-sunk: #1B1D26; --panel: #1A1C25;
+    --ink: #E9E9EE; --ink-soft: #C2C4CF; --slate: #9297A8;
+    --rule: #32343F; --rule-soft: #262832;
+    --accent: #9FAEE8; --accent-soft: #23273A;
+    --ok: #7EC0A0; --ok-bg: #1B2A24;
+    --warn: #D9AC63; --warn-bg: #2B2318;
+    --crit: #DE9188; --crit-bg: #2C1D1B;
+    --idle: #9297A8; --idle-bg: #23252E;
+  }
+  :root[data-theme="light"] {
+    --ground: #FAFAF8; --ground-sunk: #F1F1EE; --panel: #FFFFFF;
+    --ink: #16192A; --ink-soft: #3D4356; --slate: #6B7186;
+    --rule: #DEDDD6; --rule-soft: #EAE9E3;
+    --accent: #2A3566; --accent-soft: #E7E9F2;
+    --ok: #2C6149; --ok-bg: #E4EFE9;
+    --warn: #8A5D12; --warn-bg: #F6EBD6;
+    --crit: #96352D; --crit-bg: #F6E3E0;
+    --idle: #6B7186; --idle-bg: #EAE9E3;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* ---------- stage ---------- */
+
+  .stage {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .slide {
+    display: none;
+    width: min(100vw, calc(100vh * 16 / 9));
+    height: min(100vh, calc(100vw * 9 / 16));
+    padding: calc(var(--u) * 4.2) calc(var(--u) * 5.2) calc(var(--u) * 4.6);
+    flex-direction: column;
+    background: var(--ground);
+  }
+
+  .slide.on { display: flex; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .slide.on { animation: rise .34s cubic-bezier(.22,.61,.36,1) both; }
+    @keyframes rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+  }
+
+  /* ---------- slide furniture ---------- */
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: calc(var(--u) * .82);
+    font-weight: 650;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin: 0 0 calc(var(--u) * 1.5);
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u) * 1.1);
+    flex: none;
+  }
+
+  .eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  .eyebrow .n { font-family: var(--mono); color: var(--accent); letter-spacing: 0; }
+
+  h2 {
+    font-family: var(--sans);
+    font-size: calc(var(--u) * 2.5);
+    font-weight: 640;
+    letter-spacing: -.019em;
+    line-height: 1.13;
+    text-wrap: balance;
+    margin: 0 0 calc(var(--u) * 1.5);
+    flex: none;
+    max-width: 26ch;
+  }
+
+  .lede {
+    font-size: calc(var(--u) * 1.18);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0 0 calc(var(--u) * 2);
+    max-width: 60ch;
+    flex: none;
+  }
+
+  /* min-height + overflow guard: a child taller than the body must never bleed
+     out and overlap the heading above or the kicker below. */
+  .body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+  .body.top { justify-content: flex-start; }
+
+  .kicker {
+    font-family: var(--sans);
+    font-size: calc(var(--u) * .92);
+    color: var(--slate);
+    margin: calc(var(--u) * 1.6) 0 0;
+    flex: none;
+    padding-top: calc(var(--u) * 1.1);
+    border-top: 1px solid var(--rule);
+    max-width: 78ch;
+  }
+
+  .kicker strong { color: var(--ink); font-weight: 640; }
+
+  strong { font-weight: 700; color: var(--ink); }
+  em { font-style: italic; }
+
+  .cite {
+    font-family: var(--mono);
+    font-size: .84em;
+    background: var(--ground-sunk);
+    border: 1px solid var(--rule-soft);
+    border-radius: 2px;
+    padding: 1px 5px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+
+  /* ---------- cover ---------- */
+
+  .cover { justify-content: center; }
+  .cover h1 {
+    font-family: var(--sans);
+    font-size: calc(var(--u) * 4.3);
+    font-weight: 660;
+    letter-spacing: -.028em;
+    line-height: 1.03;
+    margin: 0 0 calc(var(--u) * 1.6);
+    text-wrap: balance;
+  }
+  .cover .sub {
+    font-size: calc(var(--u) * 1.42);
+    color: var(--ink-soft);
+    max-width: 46ch;
+    margin: 0 0 calc(var(--u) * 3.4);
+    line-height: 1.44;
+  }
+  .cover .meta {
+    display: flex;
+    gap: calc(var(--u) * 3.4);
+    font-family: var(--mono);
+    font-size: calc(var(--u) * .82);
+    color: var(--slate);
+    border-top: 2px solid var(--ink);
+    padding-top: calc(var(--u) * 1.3);
+    flex-wrap: wrap;
+  }
+  .cover .meta b { display: block; font-family: var(--sans); font-size: calc(var(--u) * .72); font-weight: 650; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 3px; }
+  .cover .meta span { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* ---------- ask list ---------- */
+
+  .asks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .asks li {
+    display: grid;
+    grid-template-columns: calc(var(--u) * 2.2) 1fr auto;
+    gap: calc(var(--u) * 1.4);
+    align-items: baseline;
+    padding: calc(var(--u) * 1.15) 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .asks li:last-child { border-bottom: 0; }
+  .asks .n { font-family: var(--mono); font-size: calc(var(--u) * .95); color: var(--accent); }
+  .asks .w { font-family: var(--sans); font-size: calc(var(--u) * 1.16); font-weight: 560; color: var(--ink); }
+  .asks .w em { display: block; font-style: normal; font-size: calc(var(--u) * .9); font-weight: 400; color: var(--slate); margin-top: 3px; }
+  .asks .amt { font-family: var(--mono); font-size: calc(var(--u) * .95); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; color: var(--ink); }
+
+  /* ---------- tables ---------- */
+
+  table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: calc(var(--u) * .93); }
+  th {
+    text-align: left;
+    font-size: calc(var(--u) * .73);
+    font-weight: 650;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--slate);
+    padding: calc(var(--u) * .72) calc(var(--u) * .95);
+    border-bottom: 1.5px solid var(--rule);
+    white-space: nowrap;
+  }
+  td {
+    padding: calc(var(--u) * .78) calc(var(--u) * .95);
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    color: var(--ink-soft);
+    line-height: 1.4;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.key { color: var(--ink); font-weight: 570; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+  tr.total td { border-top: 1.5px solid var(--rule); border-bottom: 0; padding-top: calc(var(--u) * .95); }
+  tr.group td {
+    font-family: var(--sans); font-size: calc(var(--u) * .72); font-weight: 650;
+    letter-spacing: .11em; text-transform: uppercase; color: var(--slate);
+    background: var(--ground-sunk); padding-top: calc(var(--u) * .5); padding-bottom: calc(var(--u) * .5);
+    border-bottom: 1px solid var(--rule);
+  }
+
+  /* 16 rows will not fit a 720p body at the default scale — see the compliance register. */
+  table.dense { font-size: calc(var(--u) * .8); }
+  table.dense th { padding: calc(var(--u) * .4) calc(var(--u) * .8); font-size: calc(var(--u) * .66); }
+  table.dense td { padding: calc(var(--u) * .4) calc(var(--u) * .8); line-height: 1.3; }
+  table.dense tr.group td { padding-top: calc(var(--u) * .32); padding-bottom: calc(var(--u) * .32); font-size: calc(var(--u) * .66); }
+
+  /* ---------- chips ---------- */
+
+  .chip {
+    display: inline-block;
+    font-family: var(--sans);
+    font-size: calc(var(--u) * .7);
+    font-weight: 650;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: 2px calc(var(--u) * .55);
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .chip.crit { background: var(--crit-bg); color: var(--crit); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn); }
+  .chip.ok   { background: var(--ok-bg);   color: var(--ok); }
+  .chip.idle { background: var(--idle-bg); color: var(--idle); }
+
+  /* ---------- columns ---------- */
+
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .cols.two { grid-template-columns: repeat(2, 1fr); }
+  .col { background: var(--panel); padding: calc(var(--u) * 1.5) calc(var(--u) * 1.5) calc(var(--u) * 1.7); display: flex; flex-direction: column; }
+  .col .tag { font-family: var(--mono); font-size: calc(var(--u) * .8); color: var(--slate); margin-bottom: calc(var(--u) * .8); }
+  .col h3 { font-family: var(--sans); font-size: calc(var(--u) * 1.24); font-weight: 630; letter-spacing: -.012em; margin: 0 0 calc(var(--u) * .85); line-height: 1.2; }
+  .col p { font-size: calc(var(--u) * .96); line-height: 1.45; margin: 0 0 calc(var(--u) * .95); color: var(--ink-soft); }
+  .col ul { font-family: var(--sans); font-size: calc(var(--u) * .87); margin: 0; padding-left: calc(var(--u) * 1.2); color: var(--ink-soft); }
+  .col ul li { margin-bottom: calc(var(--u) * .35); }
+  .col ul li::marker { color: var(--slate); }
+  .col .foot { margin-top: auto; padding-top: calc(var(--u) * 1); font-family: var(--mono); font-size: calc(var(--u) * .78); color: var(--slate); display: flex; flex-direction: column; gap: 3px; }
+
+  /* ---------- statement / note ---------- */
+
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: calc(var(--u) * 1.35) calc(var(--u) * 1.7); }
+  .note.risk { border-left-color: var(--crit); background: var(--crit-bg); }
+  .note .lbl { display: block; font-family: var(--sans); font-size: calc(var(--u) * .72); font-weight: 650; letter-spacing: .12em; text-transform: uppercase; margin-bottom: calc(var(--u) * .6); color: var(--accent); }
+  .note.risk .lbl { color: var(--crit); }
+  .note p { margin: 0; font-size: calc(var(--u) * 1.04); line-height: 1.5; max-width: 66ch; }
+  .note p + p { margin-top: calc(var(--u) * .75); }
+
+  .pull {
+    font-family: var(--sans);
+    font-size: calc(var(--u) * 1.72);
+    font-weight: 600;
+    letter-spacing: -.014em;
+    line-height: 1.3;
+    color: var(--ink);
+    max-width: 30ch;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .stat-row { display: flex; gap: calc(var(--u) * 3.6); flex-wrap: wrap; margin-bottom: calc(var(--u) * 2); }
+  .stat b { display: block; font-family: var(--sans); font-size: calc(var(--u) * 2.9); font-weight: 650; letter-spacing: -.026em; line-height: 1; font-variant-numeric: tabular-nums; color: var(--accent); }
+  .stat span { display: block; font-family: var(--sans); font-size: calc(var(--u) * .86); color: var(--slate); margin-top: calc(var(--u) * .5); max-width: 22ch; line-height: 1.35; }
+
+  ul.plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: calc(var(--u) * .85); }
+  /* Deliberately NOT grid or flex: inline <strong> children would each be promoted
+     to their own track, blowing every item up to several rows tall. */
+  ul.plain li {
+    position: relative;
+    padding-left: calc(var(--u) * 2.4);
+    font-size: calc(var(--u) * 1.06);
+    line-height: 1.45;
+    color: var(--ink-soft);
+  }
+  ul.plain li::before {
+    content: "—";
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: .8em;
+  }
+
+  /* ---------- chrome ---------- */
+
+  .chrome {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u) * 1.3);
+    padding: calc(var(--u) * .9) calc(var(--u) * 1.6);
+    font-family: var(--mono);
+    font-size: calc(var(--u) * .78);
+    color: var(--slate);
+    background: var(--ground);
+    border-top: 1px solid var(--rule);
+    z-index: 20;
+  }
+
+  .chrome .title { font-family: var(--sans); font-weight: 600; color: var(--ink-soft); }
+  .chrome .spacer { flex: 1; }
+  .chrome .count { font-variant-numeric: tabular-nums; color: var(--ink); }
+  .chrome .hint { display: none; }
+  @media (min-width: 720px) { .chrome .hint { display: inline; } }
+
+  .bar { position: fixed; top: 0; left: 0; height: 2px; background: var(--accent); z-index: 21; transition: width .3s cubic-bezier(.22,.61,.36,1); }
+
+  button.nav {
+    font: inherit;
+    font-family: var(--mono);
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink-soft);
+    border-radius: 2px;
+    padding: 2px calc(var(--u) * .7);
+    cursor: pointer;
+    line-height: 1.6;
+  }
+  button.nav:hover { border-color: var(--accent); color: var(--accent); }
+  button.nav:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, .bar { animation: none !important; transition: none !important; }
+  }
+
+  @media print {
+    body { overflow: visible; }
+    .chrome, .bar { display: none; }
+    .stage { display: block; width: auto; height: auto; }
+    .slide { display: flex !important; width: 100%; height: auto; min-height: 92vh; page-break-after: always; border-bottom: 1px solid var(--rule); }
+    .slide.on { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bar" id="bar"></div>
+
+<div class="stage" id="stage">
+
+  <!-- 1 -->
+  <section class="slide cover on">
+    <p class="eyebrow"><span class="n">BST-PROP-01</span> Product Proposal &middot; For Senior Management Approval</p>
+    <div class="body">
+      <h1>Buyer-Side Tendering</h1>
+      <p class="sub">Opening a second revenue line by letting government departments publish and run tenders on our platform — and the approvals that gate it.</p>
+      <div class="meta">
+        <div><b>Date</b><span>20 July 2026</span></div>
+        <div><b>Status</b><span>For decision</span></div>
+        <div><b>Decision by</b><span>31 August 2026</span></div>
+        <div><b>Classification</b><span>Internal</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">01</span> Decision requested</p>
+    <h2>Approve a staged entry, not a platform bet</h2>
+    <div class="body top">
+      <ul class="asks">
+        <li><span class="n">A</span><span class="w">Build Phase&nbsp;1 — tender notice publishing<em>No certification required; we never receive a bid</em></span><span class="amt">~11 person-weeks</span></li>
+        <li><span class="n">B</span><span class="w">Fund the Phase&nbsp;0 regulatory workstream<em>Counsel, STQC clarification, security audit, CA selection</em></span><span class="amt">₹6–14L</span></li>
+        <li><span class="n">C</span><span class="w">Authorise discovery with 5 procuring entities<em>Validates the buyer-side pain thesis before Phase&nbsp;2</em></span><span class="amt">~2 person-weeks</span></li>
+        <li><span class="n">D</span><span class="w">Note — <strong>no</strong> commitment to STQC certification or HSM<em>Deferred to Gate&nbsp;B, Q1 FY28</em></span><span class="amt">deferred</span></li>
+      </ul>
+    </div>
+    <p class="kicker">The large commitment — full sealed-bid e-procurement — is <strong>explicitly not requested today.</strong></p>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">02</span> The framing</p>
+    <h2>"Compete with GeM" is three products, not one</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Ambition</th><th>Legal position</th><th>Build</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="key">Replace GeM for central-government common-use goods</td>
+            <td>Blocked — <span class="cite">GFR 149</span> makes GeM the mandated channel</td>
+            <td class="num">—</td>
+            <td><span class="chip crit">Do not pursue</span></td>
+          </tr>
+          <tr>
+            <td class="key">e-Publishing — host and distribute tender <em>notices</em></td>
+            <td>Open today. No certification: we never receive a bid</td>
+            <td class="num">~11 wks</td>
+            <td><span class="chip ok">Approve now</span></td>
+          </tr>
+          <tr>
+            <td class="key">e-Procurement — receive, seal, open, evaluate bids</td>
+            <td>Legal and licensed under <span class="cite">GFR 160</span></td>
+            <td class="num">12–18 mo</td>
+            <td><span class="chip warn">Gate B</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="kicker">They differ by <strong>two orders of magnitude</strong> in cost and risk. Collapsing them was the original error.</p>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">03</span> Regulatory reality</p>
+    <h2>A private e-procurement portal is lawful — and the market already exists</h2>
+    <div class="body">
+      <div class="stat-row">
+        <div class="stat"><b>160</b><span>The GFR rule permitting a department to use "a service provider of their own choice"</span></div>
+        <div class="stat"><b>22</b><span>Private e-procurement systems holding live STQC certification today</span></div>
+        <div class="stat"><b>2012</b><span>DoE O.M. requiring departments to hold an STQC certificate for the solution they use</span></div>
+      </div>
+      <div class="note">
+        <span class="lbl">The obligation lands on the buyer, not on us</span>
+        <p>There is no statute licensing e-procurement software. The duty sits with the procuring officer, who discharges it by demanding certification from their vendor. <strong>Nothing prohibits us from selling — the requirement is that our customer can defend the choice in audit.</strong></p>
+      </div>
+    </div>
+    <p class="kicker">Incumbents include mjunction, C1 India, nCode/GNFC and abcprocure. <strong>This is not a question of permission. It is a question of whether we have anything they don't.</strong></p>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">04</span> Why us</p>
+    <h2>We start on the far side of the cold-start problem</h2>
+    <div class="body">
+      <p class="pull">Every new e-procurement portal dies the same way: departments won't publish where there are no bidders, and bidders won't join where there are no tenders.</p>
+      <div class="note" style="margin-top: calc(var(--u) * 2);">
+        <span class="lbl">The asset nobody else has</span>
+        <p>We already operate the bidder side — a scraped national corpus, a supplier base, and a live matching and alerting rail. <strong>A department publishing with us reaches suppliers on day one.</strong> Incumbents sell a portal; we can sell reach.</p>
+      </div>
+    </div>
+    <p class="kicker">Two further advantages: <strong>zero-install experience</strong> (they carry a decade of desktop-coupled architecture) and <strong>compliance-by-construction</strong>.</p>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">05</span> Differentiation</p>
+    <h2>We are not selling efficiency. We are selling defensibility.</h2>
+    <div class="body">
+      <div class="cols">
+        <div class="col">
+          <span class="tag">01</span>
+          <h3>Zero install</h3>
+          <p>CPPP requires a Class&nbsp;3 certificate on a hardware token, two key pairs per officer, and its published requirements still reference Java and legacy browsers.</p>
+          <p><strong>GeM already accepts eSign with no dongle.</strong> The old stack is an implementation choice, not a legal one.</p>
+        </div>
+        <div class="col">
+          <span class="tag">02</span>
+          <h3>Compliance by construction</h3>
+          <p>MSE reservation, Make-in-India local content, land-border registration, Integrity Pact thresholds — today checked by hand against circulars.</p>
+          <p><strong>We encode them as blocking validation, with the rule citation written into the audit file.</strong></p>
+        </div>
+        <div class="col">
+          <span class="tag">03</span>
+          <h3>The off-GeM justification</h3>
+          <p>A department procuring outside GeM must produce an availability report justifying it.</p>
+          <p><strong>We can generate it from our own GeM corpus.</strong> It is also the document that legitimises our customers' use of us.</p>
+        </div>
+      </div>
+    </div>
+    <p class="kicker">Departments fear an audit paragraph considerably more than they want speed. <strong>Sell to that.</strong></p>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">06</span> Product</p>
+    <h2>Three phases, two gates, one commitment today</h2>
+    <div class="body">
+      <div class="cols">
+        <div class="col">
+          <span class="tag">PHASE 1 &middot; approve now</span>
+          <h3>Tender notice publishing</h3>
+          <p>Draft, attach, publish. Bids still received wherever they are today. <strong>We never touch a bid.</strong></p>
+          <ul>
+            <li>Structured authoring + AI drafting</li>
+            <li>Compliance validation engine</li>
+            <li>Corrigendum with versioned diff</li>
+            <li>CPPP XML export</li>
+            <li>Hash-chained audit file</li>
+          </ul>
+          <div class="foot"><span>Certification: none</span><span>~11 person-weeks</span></div>
+        </div>
+        <div class="col">
+          <span class="tag">PHASE 2 &middot; gate A</span>
+          <h3>Managed bid receipt</h3>
+          <p>Non-sealed processes only — no financial bids held.</p>
+          <ul>
+            <li>EOI and RFI intake</li>
+            <li>Public clarification Q&amp;A</li>
+            <li>Vendor registration</li>
+            <li>Pre-bid meeting management</li>
+          </ul>
+          <div class="foot"><span>Certification: security audit</span><span>~16 person-weeks</span></div>
+        </div>
+        <div class="col">
+          <span class="tag">PHASE 3 &middot; gate B</span>
+          <h3>Sealed-bid e-procurement</h3>
+          <p>The regulated product.</p>
+          <ul>
+            <li>Client-side bid encryption</li>
+            <li>M-of-N HSM key custody</li>
+            <li>Tender opening event</li>
+            <li>Evaluation and award</li>
+          </ul>
+          <div class="foot"><span>STQC + CERT-In + ISO 27001</span><span>12–18 months</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="kicker">Phase&nbsp;1 keeps us out of the bid path entirely — <strong>a defect in our software cannot invalidate a procurement.</strong> That is risk posture, not timidity.</p>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">07</span> Compliance register</p>
+    <h2>Every approval required, by phase</h2>
+    <div class="body">
+      <table class="dense">
+        <thead><tr><th>Approval</th><th>Authority</th><th>Cost</th><th>Lead time</th><th>Confidence</th></tr></thead>
+        <tbody>
+          <tr class="group"><td colspan="5">Phase 0–1 &mdash; required before we host anything</td></tr>
+          <tr><td class="key">Security audit clearance</td><td>CERT-In / STQC empanelled lab</td><td class="num">₹1.5–5L</td><td class="num">3–6 wks</td><td>◐ estimated</td></tr>
+          <tr><td class="key">Legal opinion — Rule 160 status</td><td>External counsel</td><td class="num">₹2–5L</td><td class="num">4 wks</td><td>◐ estimated</td></tr>
+          <tr><td class="key">CPPP XML publishing conformance</td><td>NIC</td><td class="num">Nil–low</td><td class="num">4–8 wks</td><td>◐ estimated</td></tr>
+          <tr><td class="key">CA / ESP agreement for eSign</td><td>CCA-licensed provider</td><td class="num">₹2–4L</td><td class="num">4–8 wks</td><td>● verified</td></tr>
+          <tr><td class="key">GIGW 3.0 conformance</td><td>MeitY</td><td class="num">Internal</td><td class="num">Ongoing</td><td>● verified</td></tr>
+          <tr class="group"><td colspan="5">Phase 2</td></tr>
+          <tr><td class="key">Recurring security + VA reports</td><td>Empanelled lab</td><td class="num">Recurring</td><td class="num">≤6 mo cycle</td><td>● verified</td></tr>
+          <tr><td class="key">ISO/IEC 27001 ISMS</td><td>Accredited body</td><td class="num">₹5–15L</td><td class="num">4–6 mo</td><td>◐ estimated</td></tr>
+          <tr><td class="key">Indemnity &amp; cyber liability cover</td><td>Insurer</td><td class="num">Premium</td><td class="num">4 wks</td><td>○ unknown</td></tr>
+          <tr class="group"><td colspan="5">Phase 3 &mdash; deferred to Gate B</td></tr>
+          <tr><td class="key">STQC e-Procurement certification</td><td>STQC Directorate, MeitY</td><td class="num">₹3–10L</td><td class="num">6–14 wks</td><td>○ unofficial</td></tr>
+          <tr><td class="key">HSM, FIPS 140-2 L2/L3</td><td>Vendor or cloud</td><td class="num">₹15–40L</td><td class="num">8–12 wks</td><td>◐ estimated</td></tr>
+          <tr><td class="key">RFC 3161 timestamping</td><td>Licensed CA</td><td class="num">Commercial</td><td class="num">4 wks</td><td>● verified</td></tr>
+          <tr><td class="key">State IT agency empanelment</td><td>CHiPS, KEONICS, etc.</td><td class="num">Varies</td><td class="num">Months</td><td>○ unknown</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="kicker"><strong>● verified against a primary source &nbsp;·&nbsp; ◐ estimate, obtain a quote &nbsp;·&nbsp; ○ no official figure found.</strong> The existence of every requirement is documented; only the costs carry uncertainty.</p>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">08</span> The real cost of STQC</p>
+    <h2>Not a gate. A permanent constraint on how we ship.</h2>
+    <div class="body">
+      <ul class="plain">
+        <li>Valid <strong>three years</strong>, with surveillance audits after years one and two — <strong>in physical mode, not online</strong>.</li>
+        <li>Security and vulnerability reports must be <strong>no older than six months</strong> at every surveillance.</li>
+        <li>"Only major changes which affect core functionality, security or infrastructure will lead to recertification" — <strong>a material rearchitecture restarts the clock</strong>.</li>
+        <li>Deviations unrectified within three months → <strong>certificate withdrawn</strong>, and with it every government customer.</li>
+      </ul>
+      <div class="note risk" style="margin-top: calc(var(--u) * 1.6);">
+        <span class="lbl">Disclosure</span>
+        <p>We could not locate an <strong>official STQC schedule of charges</strong>. The guidelines specify only that "one man day audit charges shall be levied," excluding security testing. <strong>The ₹3–10L figure is from commercial sources and must not be used for budgeting.</strong></p>
+      </div>
+    </div>
+    <p class="kicker">This imposes release governance on <strong>the whole engineering organisation, not one service</strong> — the strongest argument for deferring Phase&nbsp;3.</p>
+  </section>
+
+  <!-- 10 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">09</span> Signing &amp; encryption</p>
+    <h2>One solved problem, one unsolved one</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Capability</th><th>Zero-install possible?</th><th>Basis</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="key">Signing — create, publish, award</td>
+            <td><span class="chip ok">Yes — proven in production</span></td>
+            <td>GeM accepts eSign for bid publishing, order creation and invoicing, for buyers and sellers alike.</td>
+          </tr>
+          <tr>
+            <td class="key">Bid encryption and decryption</td>
+            <td><span class="chip crit">No — structurally impossible</span></td>
+            <td>eSign keys are "destroyed after one time use," certificates valid "not more than 30 minutes." A bid opened three weeks later cannot use one.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="note risk" style="margin-top: calc(var(--u) * 1.8);">
+        <span class="lbl">Unresolved — gates the Phase 3 design</span>
+        <p>STQC states that only <strong>Class&nbsp;3</strong> certificates may be used in a certified system. eSign issues <em>e-KYC class</em> certificates — so on a literal reading <strong>eSign is excluded from the regulated product</strong>, removing our principal experience advantage.</p>
+        <p>We assess this as likely an artefact of vintage: the governing guidelines are dated <strong>31 August 2011</strong>, four years older than eSign itself. <strong>A written clarification from STQC is the highest-value item in Phase&nbsp;0.</strong></p>
+      </div>
+    </div>
+    <p class="kicker">For decryption, copy MeitY's own published GeM design: Class&nbsp;3 key moved <strong>off the token into an HSM</strong>, released by PIN and OTP, split so any two of three holders can open a bid.</p>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">10</span> Commercial model</p>
+    <h2>Four revenue routes, one of which we must refuse</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Route</th><th>Mechanism</th><th>Assessment</th></tr></thead>
+        <tbody>
+          <tr><td class="key">Entity subscription</td><td>Annual licence per entity, tiered by volume</td><td>Predictable, matches government budget cycles. <strong>Recommended primary.</strong></td></tr>
+          <tr><td class="key">Per-tender fee</td><td>Transaction fee per notice published</td><td>Suits low-volume entities that cannot justify a licence.</td></tr>
+          <tr><td class="key">Compliance add-ons</td><td>AI drafting, availability reports, audit export</td><td>Highest margin, unique to us, clearest upsell.</td></tr>
+          <tr><td class="key">Bidder processing fee</td><td>Charge suppliers to download or submit</td><td><span class="chip crit">Reject</span></td></tr>
+        </tbody>
+      </table>
+      <div class="note risk" style="margin-top: calc(var(--u) * 1.7);">
+        <span class="lbl">Strategic conflict — management must rule</span>
+        <p>The dominant model in this industry is to <strong>tax the bidder</strong>. Our existing business <em>is</em> the bidder. Adopting it would monetise the buyer side by degrading the constituency our current revenue depends on. <strong>We recommend a standing public commitment never to charge bidders.</strong></p>
+      </div>
+    </div>
+    <p class="kicker"><strong>No revenue forecast is offered.</strong> We have no pricing research and no conversion data; a projection built on neither would be decoration. Establishing willingness to pay is Ask&nbsp;C.</p>
+  </section>
+
+  <!-- 12 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">11</span> Investment</p>
+    <h2>What is being committed today</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Item</th><th>Phase</th><th>Effort</th><th>External cost</th></tr></thead>
+        <tbody>
+          <tr><td class="key">Tender authoring &amp; publishing build</td><td class="num">1</td><td class="num">~11 person-wks</td><td class="num">—</td></tr>
+          <tr><td class="key">Compliance rules engine + CPPP exporter</td><td class="num">1</td><td class="num">included</td><td class="num">—</td></tr>
+          <tr><td class="key">Legal opinion</td><td class="num">0</td><td class="num">—</td><td class="num">₹2–5L</td></tr>
+          <tr><td class="key">Security audit clearance</td><td class="num">0</td><td class="num">—</td><td class="num">₹1.5–5L</td></tr>
+          <tr><td class="key">CA / ESP onboarding</td><td class="num">0</td><td class="num">—</td><td class="num">₹2–4L</td></tr>
+          <tr><td class="key">Entity discovery — 5 interviews</td><td class="num">0</td><td class="num">~2 person-wks</td><td class="num">—</td></tr>
+          <tr class="total"><td class="key"><strong>Total requested</strong></td><td class="num">—</td><td class="num"><strong>~13 person-wks</strong></td><td class="num"><strong>₹6–14L</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="note" style="margin-top: calc(var(--u) * .7);">
+        <span class="lbl">Deferred and explicitly not requested</span>
+        <p>STQC certification, HSM procurement, ISO&nbsp;27001 and the Phase&nbsp;3 build — together roughly <strong>₹25–70&nbsp;lakh</strong> plus 12–18 months of engineering and a security specialist we do not employ.</p>
+      </div>
+    </div>
+    <p class="kicker">Stated in person-weeks so it can be priced against the current cost base. <strong>No new hire is requested for Phase&nbsp;1.</strong></p>
+  </section>
+
+  <!-- 13 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">12</span> Roadmap</p>
+    <h2>Two gates, each with a defined stop condition</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Period</th><th>Milestone</th><th>Gate condition</th></tr></thead>
+        <tbody>
+          <tr><td class="num">Aug–Sep 2026</td><td class="key">Phase 0 — regulatory workstream</td><td>Legal opinion received; STQC clarification requested; CA selected.</td></tr>
+          <tr><td class="num">Sep–Nov 2026</td><td class="key">Phase 1 build</td><td>Authoring, compliance engine, CPPP export, audit trail.</td></tr>
+          <tr><td class="num">Nov 2026</td><td class="key">Security audit clearance</td><td>Certificate obtained before production hosting.</td></tr>
+          <tr><td class="num">Dec 2026</td><td class="key">Pilot — 3 procuring entities</td><td>Live tenders published; bidder reach demonstrated.</td></tr>
+          <tr><td class="num">Q4 FY27</td><td class="key"><strong>Gate A</strong></td><td><strong>≥5 entities publishing and ≥1 paying → fund Phase 2. Otherwise stop.</strong></td></tr>
+          <tr><td class="num">Q1 FY28</td><td class="key"><strong>Gate B</strong></td><td><strong>Phase 2 revenue proven <em>and</em> STQC position clarified in writing → fund Phase 3. Otherwise hold.</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="kicker">Holding permanently at Phase&nbsp;2 is an <strong>acceptable outcome, not a failure</strong> — a profitable publishing product with no certification burden and no exposure to procurement disputes.</p>
+  </section>
+
+  <!-- 14 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">13</span> Risks</p>
+    <h2>Ranked by impact on this decision</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th>Risk</th><th>Sev.</th><th>Mitigation</th></tr></thead>
+        <tbody>
+          <tr><td class="key">STQC excludes eSign, removing our advantage from the regulated product</td><td><span class="chip crit">High</span></td><td>Written clarification in Phase 0. A negative answer is a valid reason not to pass Gate B.</td></tr>
+          <tr><td class="key">Buyer-side pain thesis is inferred, not validated</td><td><span class="chip crit">High</span></td><td>Ask C — five entity interviews before Phase 2 money is committed.</td></tr>
+          <tr><td class="key">STQC change-control conflicts with continuous deployment</td><td><span class="chip warn">Medium</span></td><td>Assess as a Gate B precondition; treat as organisation-wide cost.</td></tr>
+          <tr><td class="key">A defect becomes a procurement dispute</td><td><span class="chip warn">Medium</span></td><td>Phase 1 stays out of the bid path. Indemnity cover before Phase 2.</td></tr>
+          <tr><td class="key">Regulatory drift — rules change, old tenders misjudged</td><td><span class="chip warn">Medium</span></td><td>Version the rule set; pin each tender to the rules in force at publication.</td></tr>
+          <tr><td class="key">Entrenched incumbents, several PSU-backed</td><td><span class="chip warn">Medium</span></td><td>Compete only where they cannot follow quickly.</td></tr>
+          <tr><td class="key">Infrastructure capacity</td><td><span class="chip idle">Low</span></td><td>Size before Phase 1 ships; already tracked.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="kicker"><strong>All buyer-side pain points are reasoned from regulatory documents and official manuals — none were obtained from a serving procurement officer.</strong></p>
+  </section>
+
+  <!-- 15 -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">14</span> Recommendation</p>
+    <h2>Buy information cheaply before buying the platform expensively</h2>
+    <div class="body">
+      <p class="pull">Phase&nbsp;1 costs roughly eleven person-weeks, requires no certification, generates revenue, and produces exactly the three things Gate&nbsp;B needs.</p>
+      <ul class="plain" style="margin-top: calc(var(--u) * 2);">
+        <li>Real departments on the platform</li>
+        <li>Real willingness-to-pay data</li>
+        <li>A written answer from STQC</li>
+      </ul>
+      <div class="note" style="margin-top: calc(var(--u) * 2);">
+        <p>If Phase&nbsp;1 fails to attract entities, we will have learned that <strong>for the price of a quarter of one engineer's year</strong> — rather than for the price of a certified platform.</p>
+      </div>
+    </div>
+    <p class="kicker">Decision requested by <strong>31 August 2026</strong>. Full proposal and engineering plan available on request.</p>
+  </section>
+
+</div>
+
+<div class="chrome">
+  <span class="title">Buyer-Side Tendering</span>
+  <span>BST-PROP-01</span>
+  <span class="spacer"></span>
+  <span class="hint">← → or space to navigate · P to print</span>
+  <button class="nav" id="prev" aria-label="Previous slide">←</button>
+  <button class="nav" id="next" aria-label="Next slide">→</button>
+  <span class="count"><span id="cur">1</span>/<span id="tot">15</span></span>
+</div>
+
+<script>
+  (function () {
+    var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+    var cur = document.getElementById('cur');
+    var tot = document.getElementById('tot');
+    var bar = document.getElementById('bar');
+    var i = 0;
+
+    tot.textContent = slides.length;
+
+    function show(n) {
+      i = Math.max(0, Math.min(slides.length - 1, n));
+      slides.forEach(function (s, k) { s.classList.toggle('on', k === i); });
+      cur.textContent = i + 1;
+      bar.style.width = ((i + 1) / slides.length * 100) + '%';
+      if (location.hash !== '#' + (i + 1)) history.replaceState(null, '', '#' + (i + 1));
+    }
+
+    document.getElementById('next').addEventListener('click', function () { show(i + 1); });
+    document.getElementById('prev').addEventListener('click', function () { show(i - 1); });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); show(i + 1); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(i - 1); }
+      else if (e.key === 'Home') { e.preventDefault(); show(0); }
+      else if (e.key === 'End') { e.preventDefault(); show(slides.length - 1); }
+      else if (e.key === 'p' || e.key === 'P') { window.print(); }
+    });
+
+    document.getElementById('stage').addEventListener('click', function (e) {
+      if (e.target.closest('.chrome')) return;
+      show(i + 1);
+    });
+
+    var start = parseInt((location.hash || '').slice(1), 10);
+    show(isNaN(start) ? 0 : start - 1);
+  })();
+</script>
+
+</body>
+</html>

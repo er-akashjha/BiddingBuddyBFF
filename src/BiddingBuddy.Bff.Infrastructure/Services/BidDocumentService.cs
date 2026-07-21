@@ -3,6 +3,8 @@ using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
@@ -12,7 +14,7 @@ namespace BiddingBuddy.Bff.Infrastructure.Services;
 /// task-completion note). Writes only ever touch the link table — attachments are still
 /// created by the task-close flow in <see cref="BidService"/>.
 /// </summary>
-public class BidDocumentService(BffDbContext db) : IBidDocumentService
+public class BidDocumentService(BffDbContext db, ILogger<BidDocumentService> logger) : IBidDocumentService
 {
     public async Task<IReadOnlyList<BidDocumentDto>> ListAsync(
         Guid orgId, Guid bidId, CancellationToken ct = default)
@@ -123,7 +125,63 @@ public class BidDocumentService(BffDbContext db) : IBidDocumentService
                 CreatedAt  = DateTime.UtcNow,
             };
             db.BidDocuments.Add(link);
-            await db.SaveChangesAsync(ct);
+
+            try
+            {
+                await db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex)
+            {
+                var pg = ex.InnerException as PostgresException;
+
+                // DbUpdateException's own message names only the DbContext ("An exception
+                // occurred in the database while saving changes for context type
+                // 'BffDbContext'") — every fact that identifies the failure lives on the inner
+                // PostgresException, which is exactly the part a log export truncates. That is
+                // what left the 2026-07-19 production 500 on this endpoint undiagnosable, so
+                // the SQLSTATE and constraint go in the message template as their own
+                // structured properties, where truncation can't reach them and Loki can
+                // filter on them.
+                logger.LogError(ex,
+                    "bid_documents insert failed → SQLSTATE {SqlState}, constraint {ConstraintName}, " +
+                    "table {PgTable}: {PgMessage} (detail: {PgDetail}) " +
+                    "[org {OrgId}, bid {BidId}, document {DocumentId}, user {UserId}]",
+                    pg?.SqlState       ?? "<not-a-PostgresException>",
+                    pg?.ConstraintName ?? "<none>",
+                    pg?.TableName      ?? "<none>",
+                    pg?.MessageText    ?? ex.InnerException?.Message ?? ex.Message,
+                    pg?.Detail         ?? "<none>",
+                    orgId, bidId, doc.Id, userId);
+
+                // 23505 only. Anything else — a missing relation (42P01), a foreign key the
+                // pre-checks didn't cover (23503) — is a real fault and must keep bubbling to
+                // the 500 it deserves, now with the SQLSTATE above to name it.
+                if (pg?.SqlState != PostgresErrorCodes.UniqueViolation) throw;
+
+                // Lost the check-then-act race: the existence check above and this insert are
+                // not atomic, so a concurrent link of the same (bid, document) can commit
+                // in between. Linking a document twice is meant to be a no-op that returns the
+                // existing row — that is the endpoint's documented contract — so adopt the
+                // winner's row rather than failing a request that asked for a state the
+                // database is already in.
+                //
+                // The failed insert stays tracked in Added state after SaveChanges throws;
+                // leaving it attached would make it a candidate for re-insert on any later
+                // SaveChanges on this scoped context.
+                db.Entry(link).State = EntityState.Detached;
+
+                link = await db.BidDocuments
+                    .FirstOrDefaultAsync(l => l.BidId == bidId && l.DocumentId == doc.Id, ct);
+
+                // A unique violation whose row then isn't there means the winner rolled back
+                // between our insert and this re-read. Nothing to adopt — let the original
+                // exception stand rather than inventing a link that doesn't exist.
+                if (link is null) throw;
+
+                logger.LogInformation(
+                    "Concurrent link of document {DocumentId} to bid {BidId} resolved to the existing row {LinkId}",
+                    doc.Id, bidId, link.Id);
+            }
         }
 
         var linkerName = await db.Users
