@@ -1,10 +1,211 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v26**
+Current version: **v30**
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v30 — 2026-07-20 16:28 IST
+
+**Grants had no landing place in Postgres, so nothing downstream of ingestion could see them.** This adds the shadow index, the pipeline ingest endpoint and the client read path.
+
+### What changed
+
+- **Migration `0028_add_grant_opportunities.sql`** — `id UUID` generated + `mongo_grant_id TEXT` unique-partial from day one, avoiding the retrofit migration `0010` had to do for tenders. The natural key is **composite** `(platform, platform_grant_id)`: a grant id is only unique within its portal, which is the lesson `0022` had to apply to `tenders` after a single-column unique proved wrong.
+- **Deadlines are `DATE`, not `TIMESTAMPTZ`.** Grants.gov publishes no cutoff time — dates come back as a literal midnight Eastern, and federal deadlines are conventionally 5 PM or 11:59 PM ET without the API ever saying which. A `TIMESTAMPTZ` would encode an invented deadline; `close_date_explanation` carries the source's own prose instead, because a close date alone cannot express rolling, "see NOFO", or a two-stage LOI → full deadline.
+- **Both `applicant_types_raw` and `applicant_type_codes`.** The labels are the closed government vocabulary that decides who may legally apply and must survive unparaphrased; the codes are what a query can practically filter on. GIN index on the codes — "which grants can a federally recognized tribe apply for" is the question this product exists to answer.
+- **`InternalGrantsController`** (`/internal/grants`, `[PipelineApiKey]`) + **`InternalGrantPipelineService`**. Its own controller and route prefix, matching how `InternalMatchingController` and `InternalDigestsController` are split, and keeping the product line separable if the deployment is ever split (PLAN §0.2).
+- **The update path coalesces** (`x = dto.x ?? existing.x`). A seed-only re-scrape legitimately arrives with most fields null, and overwriting with those nulls would strip a good record down to its identity every time an AI call failed. `mongo_grant_id` is **set-once** — changing it orphans every deep-link and `notification_reminders` row already pointing at it.
+- **`GrantsController`** (`/api/grants`) + **`IGrantServicesClient`** + **`GrantDetailsTranslator`**, proxying Mongo as the tender read path does. The client is implemented on the existing `BiddingBuddyServicesClient` so grants share its cached JWT rather than maintaining a second token.
+- **`GrantDetailsTranslator` uses `Guid.TryParse`, never `Guid.Parse`.** `TenderDetailsTranslator` does an unguarded parse at `:20` and `:91`, so one non-GUID row 500s a whole list page and only one caller catches the `FormatException`. Grant ids are GUID-shaped by construction upstream, but that is another service's invariant and a list endpoint must not be one bad row away from a 500. Unparseable rows are dropped from a list; a detail returns 404.
+
+### Not done here, and why
+
+**EF global query filters (PLAN §4.2) are deliberately not in this change.** `grant_opportunities` is a **global corpus** like `tenders` — it has no `org_id`, so there is nothing to filter. The filters matter for the org-scoped grant tables (matches, alert rules, settings), which arrive with the matching workstream. Applying one naively there would also **silently break the match scan**, which runs in a `BackgroundService` with no org context and would see zero rows; a null-safe predicate (`_tenant.OrgId == null || e.OrgId == _tenant.OrgId`) is the shape to use, and it belongs in the change that introduces those tables.
+
+Tests: **+19, 179 green** (baseline 160). Note `UseInMemoryDatabase` enforces neither foreign keys, unique indexes nor CHECK constraints, so the natural-key uniqueness and `ck_grant_opportunities_status` are **not** covered by these tests — they live in the migration and would need Testcontainers/PostgreSQL to exercise.
+
+Deploy order: **BFF before BidProcessor** — it owns the migration and the internal API the processor calls. Migrations auto-apply at startup and are deliberately non-fatal, so verify the `Schema up to date (N scripts applied)` line rather than assuming.
+
+---
+
+## v29 — 2026-07-19 02:07 IST
+
+**The two answers to "which organizations can I use" now agree.** There are exactly two, and
+they disagreed about deactivated organizations:
+
+| Source | Filter | Used by |
+|---|---|---|
+| `OrganizationRepository.IsUserMemberAsync` | `m.Status == "active"` | `OrgContextMiddleware` — decides 403 on every org-scoped request |
+| `OrganizationRepository.FindByUserIdAsync` | `m.Status == "active"` **and** `o.IsActive` | `GET /api/auth/me` — the SPA's org switcher |
+
+So an organization with `is_active = false` whose membership row was still live **passed the
+middleware gate while being absent from `/api/auth/me`**. Any client reconciling its cached org
+against `/api/auth/me` would conclude the org was gone and move the user off one that in fact
+still worked.
+
+- **`IsUserMemberAsync` now joins `organizations` and requires `IsActive`**, matching
+  `FindByUserIdAsync`. Aligned in the deny direction deliberately: a deactivated organization
+  should not be usable, and `/api/auth/me` has always been the stricter of the two, so this
+  makes the gate agree with the list rather than the reverse (which would have surfaced
+  deactivated orgs in the switcher).
+
+- Blast radius is small by construction: `IsUserMemberAsync` has exactly one caller
+  (`OrgContextMiddleware`). `GetUserRoleAsync` is deliberately left alone — it only ever runs
+  against orgs `FindByUserIdAsync` already filtered.
+
+This lands alongside **bidding-buddy-ui v22**, which re-validates the SPA's org against
+`/api/auth/me` on any 403. That change is what turns this inconsistency from latent into
+user-visible, which is why the two ship together.
+
+New `tests/Orgs/OrgMembershipGateTests.cs` pins both halves. A theory asserts the gate and
+`/api/auth/me` return the *same* verdict across all four (org active × membership status)
+combinations — the assertion is that they agree, not merely that each is individually right.
+A second test guards the mapping: the InMemory provider evaluates `m.Organization.IsActive`
+in memory and would stay green even if the navigation resolved to a shadow FK with no column
+behind it, so the relational SQL is asserted directly via `ToQueryString()` (no connection
+opened). It generates `INNER JOIN organizations AS o0 ON o.org_id = o0.id … AND o0.is_active`
+— the explicit `HasForeignKey(x => x.OrgId)` in `OrganizationConfiguration`, not a
+conventional `OrganizationId`. Suite: 160/160.
+
+## v28 — 2026-07-19 02:02 IST
+
+**`POST /api/bids/{id}/documents` is now idempotent on a unique-constraint collision, and the
+SQLSTATE that identifies the production 500 is finally logged.** Follow-up to v27's "Not fixed"
+note. **The deciding datum is still not in hand** — see the honest status at the bottom.
+
+- **`BidDocumentService.LinkAsync` — catches `DbUpdateException`, and on SQLSTATE `23505`
+  re-reads and returns the existing link.** The existence pre-check and the insert are not
+  atomic and there is no `ON CONFLICT`, so a concurrent link of the same `(bid, document)` made
+  the loser 500. The endpoint's own XML doc already promises "Re-linking the same document is a
+  no-op that returns the existing row" — the 500 broke a documented contract, so this is a fix
+  regardless of whether 23505 turns out to be the production error.
+  - The failed insert is **detached** before the re-read. EF leaves it tracked in `Added` state
+    after `SaveChanges` throws, where it would be a candidate for re-insert on any later
+    `SaveChanges` on the same scoped context.
+  - **Only 23505 is swallowed.** 42P01 (missing relation) and 23503 (a foreign key the
+    pre-checks don't cover) still bubble to a 500. Swallowing those would convert an unapplied
+    migration into a silent success — the opposite of what this endpoint needs.
+  - If the unique violation fires but the row is then **gone** (the winner rolled back), the
+    original exception is rethrown rather than fabricating a link.
+
+- **The SQLSTATE and constraint name are now structured properties in the message template.**
+  `DbUpdateException.Message` names only the DbContext; everything identifying lives on the
+  inner `PostgresException` — which is precisely what the Loki export truncated, and precisely
+  why v27 could not close this. `SqlState`, `ConstraintName`, `TableName`, `MessageText` and
+  `Detail` now sit in the message text itself (plus org/bid/document/user), so truncation
+  can't reach them and Loki can filter on them.
+
+- **Tests: `tests/…/Documents/BidDocumentServiceLinkTests.cs` (new, 12 tests).**
+  `BidDocumentService` had **zero** coverage before this. Suite is **160/160 green** (148 before).
+  - The suite runs on `UseInMemoryDatabase`, which enforces neither foreign keys nor unique
+    indexes: `ux_bid_documents_bid_doc` does not exist there and the collision **cannot be
+    provoked organically**. A test that inserted the same pair twice in-memory would pass
+    against the unfixed code and prove nothing. The race is therefore injected at the only seam
+    that matters — `SaveChangesAsync` throws the `DbUpdateException`/`PostgresException` pair
+    Npgsql would raise, while the "winner" row lands through a second context on the same store.
+  - `Link_WhenAConcurrentRequestWinsTheInsert_…` was **verified to fail against the unfixed
+    path** (recovery branch neutered → `DbUpdateException`) before the fix was restored, so it
+    reproduces the bug rather than merely asserting the new code.
+  - Also covers the happy path, sequential re-link, both tenant-isolation guards, the 42P01
+    must-still-throw guard, and the rolled-back-winner rethrow.
+
+**Correction to v27's hypothesis — the concurrency story does not hold up on its own.**
+v27 cited `LinkDocumentDialog` firing N concurrent POSTs via `Promise.allSettled`. It does, but
+within one batch `selected` is a `Set`, so **every POST carries a distinct `document_id` and they
+cannot collide with each other** on `(bid_id, document_id)`. The Link button is also disabled
+while `linking` is true, and no `StrictMode` double-invoke is in play. The surviving 23505
+windows are narrower than v27 implied:
+upload→link (`BidDetailPage`) racing a dialog link of the same doc (the dialog's `already` flag
+is computed from a possibly-stale list) · two tabs or two users linking the same doc to the same
+bid · a client retry after a timeout whose first request actually committed.
+These are real but rare — consistent with a sporadic 500, yet **not** enough to call 23505
+confirmed.
+
+**Still not confirmed — the production datum was not obtainable from this environment.**
+Both routes to it are closed here, and neither was worked around:
+- **Logs:** Grafana (`13.126.1.28:3000`) returns 401 and its admin password is not in the repo
+  (`.env.prod` is `.example` only); Loki's 3100 is not published outside the compose network;
+  there is no SSH key on this machine for the box.
+- **Direct DB:** prod Postgres *is* reachable and the credentials are in
+  `appsettings.Development.json`, but the sandbox denied the connection attempt.
+
+So the SQLSTATE remains unmeasured, and this entry does **not** claim 23505 is the cause. To
+close it, run either of these and read the code off the result:
+```bash
+# the log, once the new line ships
+{container="bff"} |= "bid_documents insert failed"
+
+# or the relation itself, read-only
+psql "$PROD" -c "SELECT to_regclass('public.bid_documents');"
+psql "$PROD" -c "SELECT count(*), max(created_at) FROM bid_documents;"
+```
+A non-null `to_regclass` with rows recently created rules out 42P01 and leaves the race. A NULL
+means 42P01 and migration `0026` did not apply the way v26's "26 scripts already applied" line
+implied — in which case the fix above is still correct but insufficient, and the 42P01 guard is
+what will say so.
+
+**Read that "26" carefully.** The migrations folder holds **exactly 26 scripts**, because `0017`
+is missing from the sequence (`0016` → `0018`) while `0027` exists: 0001–0016 is 16, 0018–0027 is
+10. So "26 scripts already applied" is a **count of scripts, not a reference to migration
+`0026`** — it implies `0026` is applied only because that count happens to equal the total number
+of scripts present. The two numbers colliding is a coincidence of the missing `0017`, and it will
+stop holding the moment a new migration lands. It is thin evidence to have ruled 42P01 out on,
+which is why the 42P01 path is still guarded rather than assumed away.
+
+## v27 — 2026-07-19 01:46 IST
+
+**Upstream failures were reported to callers as 400 Bad Request, and the error handler
+itself threw — turning handled 4xx/502s into bare 500s.** Diagnosed from the 2026-07-19
+"Recent errors" Loki export. Paired with BiddingBuddyServices v9, which fixes the
+underlying `/api/tenders/search` failure.
+
+- **`Core/Exceptions/UpstreamServiceException.cs` (new), mapped to 502 Bad Gateway.**
+  `BiddingBuddyServicesClient` threw plain `InvalidOperationException` for both transport
+  failures and non-success upstream responses. `GlobalExceptionHandler` maps that type to
+  **400**, so a BiddingBuddyServices fault was reported to the SPA as *the client's* bad
+  request. The new type carries the service name and the upstream status.
+
+- **`GlobalExceptionHandler` — passed `RequestAborted` to `WriteAsJsonAsync`.** The `ct`
+  parameter that `IExceptionHandler.TryHandleAsync` receives *is* `HttpContext.RequestAborted`.
+  On exactly these slow upstream failures the SPA often gave up first, so the token was
+  already cancelled, the write threw from inside the handler, `ExceptionHandlerMiddleware`
+  logged *"An exception was thrown attempting to execute the error handler"* and rethrew the
+  original — which Kestrel turned into a bare 500. That log line appears alongside every
+  `/api/tenders/paged` 500 in the export. Writing the error body is best-effort cleanup and
+  now uses `CancellationToken.None`. Also added a `Response.HasStarted` guard that returns
+  `false` instead of throwing when the response is already on the wire.
+
+- **The "Network error reaching BiddingBuddyServices" log line was misleading and is gone.**
+  All four `catch` blocks in `BiddingBuddyServicesClient` catch `Exception` — broader than
+  transport faults — so client disconnects and timeouts were all labelled connectivity
+  problems. This is what sent people chasing DNS and service discovery on
+  `http://services:5273/` while the real failure was an unhandled exception inside
+  BiddingBuddyServices tearing down the response. The message now names the exception type,
+  and says the request failed *before a response was read*.
+
+- **Upstream 5xx was logged at Warning, so it never reached the errors dashboard.** All five
+  non-success sites now log at Error for 5xx, Warning for 4xx.
+
+- **Tests: `tests/…/Middleware/GlobalExceptionHandlerTests.cs` (new, 8 tests).** Covers the
+  502 mapping, a regression guard that the existing 404/403/400/500 mappings are unchanged,
+  the cancelled-caller write, and the already-started response. Suite is **148/148 green**
+  (140 before). The cancelled-caller test was verified to *fail* against the old `ct`
+  behaviour before the fix was restored — it genuinely reproduces the production bug rather
+  than merely asserting the new code.
+
+**Not fixed — needs a production datum, not a code change.** `POST /api/bids/{id}/documents`
+500s on an EF `SaveChanges` (`bid_documents` insert: 6 params matching id, bid_id,
+created_at, document_id, linked_by, org_id). Migration 0026 **is** applied (v26 logged
+`26 scripts already applied`), and the v26 FK-ordering bug cannot reach this path — all four
+parents are validated before the insert and the PK is an explicit `Guid.NewGuid()`. The live
+candidate is a 23505 race: `BidDocumentService.LinkAsync` is check-then-act with no
+`ON CONFLICT`, and `LinkDocumentDialog` fires N concurrent POSTs. **The deciding datum is the
+inner `PostgresException.SqlState`, which is truncated out of the log export** — 42P01 would
+mean a missing relation, 23505 the race. Per v26's own closing note, read the production log
+rather than inferring from the schema. `BidDocumentService` also has no test coverage, and
+the suite runs on `UseInMemoryDatabase`, which enforces neither FKs nor unique indexes.
 
 ## v26 — 2026-07-18 15:08 IST
 

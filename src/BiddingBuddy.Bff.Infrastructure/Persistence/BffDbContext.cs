@@ -20,6 +20,10 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<OrgMember> OrgMembers => Set<OrgMember>();
     public DbSet<OrganizationInvite> OrganizationInvites => Set<OrganizationInvite>();
 
+    // Grants (GRANT product line). A global corpus like Tenders — no org_id; org-scoped grant
+    // tables carry their own tenancy.
+    public DbSet<GrantOpportunity> GrantOpportunities => Set<GrantOpportunity>();
+
     // Tenders
     public DbSet<Tender> Tenders => Set<Tender>();
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();

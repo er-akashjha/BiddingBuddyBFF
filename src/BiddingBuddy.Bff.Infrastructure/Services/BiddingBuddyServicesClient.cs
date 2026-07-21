@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Web;
+using BiddingBuddy.Bff.Core.DTOs.Grants;
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
+using BiddingBuddy.Bff.Core.Exceptions;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Extensions;
 using Microsoft.Extensions.Configuration;
@@ -17,7 +19,7 @@ namespace BiddingBuddy.Bff.Infrastructure.Services;
 /// and refreshed automatically when it expires.
 /// Config: BiddingBuddyServices:BaseUrl | :Username | :Password
 /// </summary>
-public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
+public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient, IGrantServicesClient
 {
     private readonly HttpClient _http;
     private readonly string     _username;
@@ -74,9 +76,19 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Network error reaching BiddingBuddyServices at {Base}", _http.BaseAddress);
-            throw new InvalidOperationException(
-                $"Could not connect to BiddingBuddyServices: {ex.Message}", ex);
+            // Deliberately NOT logged as "network error". This catch is broad (any
+            // exception from SendAsync), so it also sees client disconnects and timeouts.
+            // Calling all of them a connectivity fault is what sent people chasing DNS
+            // and service discovery on http://services:5273/ while the real failure was
+            // an unhandled exception inside BiddingBuddyServices tearing down the
+            // response. The exception type is now part of the message.
+            _log.LogError(ex,
+                "Request to BiddingBuddyServices at {Base} failed before a response was read ({ExType}: {ExMessage})",
+                _http.BaseAddress, ex.GetType().Name, ex.Message);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"Request to BiddingBuddyServices failed: {ex.Message}",
+                inner: ex);
         }
 
         // Token may have been invalidated externally — refresh once and retry
@@ -93,9 +105,16 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException(
-                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+            // A 5xx from upstream is an error on our side of the trust boundary, not a
+            // warning. Logging it at Warning kept every real BiddingBuddyServices failure
+            // out of the errors dashboard, leaving only the misleading catch below.
+            _log.Log(
+                (int)response.StatusCode >= 500 ? LogLevel.Error : LogLevel.Warning,
+                "BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}",
+                (int)response.StatusCode);
         }
         
         var stream     = await response.Content.ReadAsStreamAsync(ct);
@@ -123,9 +142,19 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Network error reaching BiddingBuddyServices at {Base}", _http.BaseAddress);
-            throw new InvalidOperationException(
-                $"Could not connect to BiddingBuddyServices: {ex.Message}", ex);
+            // Deliberately NOT logged as "network error". This catch is broad (any
+            // exception from SendAsync), so it also sees client disconnects and timeouts.
+            // Calling all of them a connectivity fault is what sent people chasing DNS
+            // and service discovery on http://services:5273/ while the real failure was
+            // an unhandled exception inside BiddingBuddyServices tearing down the
+            // response. The exception type is now part of the message.
+            _log.LogError(ex,
+                "Request to BiddingBuddyServices at {Base} failed before a response was read ({ExType}: {ExMessage})",
+                _http.BaseAddress, ex.GetType().Name, ex.Message);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"Request to BiddingBuddyServices failed: {ex.Message}",
+                inner: ex);
         }
 
         if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
@@ -141,9 +170,16 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException(
-                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+            // A 5xx from upstream is an error on our side of the trust boundary, not a
+            // warning. Logging it at Warning kept every real BiddingBuddyServices failure
+            // out of the errors dashboard, leaving only the misleading catch below.
+            _log.Log(
+                (int)response.StatusCode >= 500 ? LogLevel.Error : LogLevel.Warning,
+                "BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}",
+                (int)response.StatusCode);
         }
 
         var stream    = await response.Content.ReadAsStreamAsync(ct);
@@ -273,9 +309,19 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Network error reaching BiddingBuddyServices at {Base}", _http.BaseAddress);
-            throw new InvalidOperationException(
-                $"Could not connect to BiddingBuddyServices: {ex.Message}", ex);
+            // Deliberately NOT logged as "network error". This catch is broad (any
+            // exception from SendAsync), so it also sees client disconnects and timeouts.
+            // Calling all of them a connectivity fault is what sent people chasing DNS
+            // and service discovery on http://services:5273/ while the real failure was
+            // an unhandled exception inside BiddingBuddyServices tearing down the
+            // response. The exception type is now part of the message.
+            _log.LogError(ex,
+                "Request to BiddingBuddyServices at {Base} failed before a response was read ({ExType}: {ExMessage})",
+                _http.BaseAddress, ex.GetType().Name, ex.Message);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"Request to BiddingBuddyServices failed: {ex.Message}",
+                inner: ex);
         }
 
         // Token may have been invalidated externally — refresh once and retry
@@ -292,9 +338,16 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException(
-                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+            // A 5xx from upstream is an error on our side of the trust boundary, not a
+            // warning. Logging it at Warning kept every real BiddingBuddyServices failure
+            // out of the errors dashboard, leaving only the misleading catch below.
+            _log.Log(
+                (int)response.StatusCode >= 500 ? LogLevel.Error : LogLevel.Warning,
+                "BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}",
+                (int)response.StatusCode);
         }
 
         var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -325,8 +378,13 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException($"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+            _log.Log(
+                (int)response.StatusCode >= 500 ? LogLevel.Error : LogLevel.Warning,
+                "BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}",
+                (int)response.StatusCode);
         }
 
         var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -358,9 +416,19 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Network error reaching BiddingBuddyServices at {Base}", _http.BaseAddress);
-            throw new InvalidOperationException(
-                $"Could not connect to BiddingBuddyServices: {ex.Message}", ex);
+            // Deliberately NOT logged as "network error". This catch is broad (any
+            // exception from SendAsync), so it also sees client disconnects and timeouts.
+            // Calling all of them a connectivity fault is what sent people chasing DNS
+            // and service discovery on http://services:5273/ while the real failure was
+            // an unhandled exception inside BiddingBuddyServices tearing down the
+            // response. The exception type is now part of the message.
+            _log.LogError(ex,
+                "Request to BiddingBuddyServices at {Base} failed before a response was read ({ExType}: {ExMessage})",
+                _http.BaseAddress, ex.GetType().Name, ex.Message);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"Request to BiddingBuddyServices failed: {ex.Message}",
+                inner: ex);
         }
 
         // Token may have been invalidated externally — refresh once and retry
@@ -377,9 +445,16 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            _log.LogWarning("BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
-            throw new InvalidOperationException(
-                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}");
+            // A 5xx from upstream is an error on our side of the trust boundary, not a
+            // warning. Logging it at Warning kept every real BiddingBuddyServices failure
+            // out of the errors dashboard, leaving only the misleading catch below.
+            _log.Log(
+                (int)response.StatusCode >= 500 ? LogLevel.Error : LogLevel.Warning,
+                "BiddingBuddyServices {Status}: {Body}", (int)response.StatusCode, body);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}",
+                (int)response.StatusCode);
         }
 
         var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -495,4 +570,55 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient
         [property: JsonPropertyName("accessToken")] string AccessToken,
         [property: JsonPropertyName("tokenType")]   string TokenType,
         [property: JsonPropertyName("expiresIn")]   int    ExpiresIn);
+
+    // ── GRANT product line ───────────────────────────────────────────────────────
+    // Implemented on this class rather than a separate client so grants share the cached JWT
+    // (GetTokenAsync + _tokenLock). A second client would hold a second token and double the
+    // POST /auth/token traffic while doubling the ways auth can go stale.
+
+    /// <inheritdoc/>
+    public async Task<GrantSearchItemDto?> GetRawGrantAsync(string grantId, CancellationToken ct = default) =>
+        await GetJsonOrNullAsync<GrantSearchItemDto>(
+            $"api/grants/{Uri.EscapeDataString(grantId)}", ct);
+
+    /// <inheritdoc/>
+    public async Task<RawGrantPageDto> SearchGrantsAsync(
+        GrantSearchRequestDto query, CancellationToken ct = default)
+    {
+        var page = await GetJsonOrNullAsync<RawGrantPageDto>(BuildGrantSearchUrl(query), ct);
+        return page ?? new RawGrantPageDto([], 0, query.Page, query.PageSize, 0);
+    }
+
+    /// <summary>
+    /// Builds the upstream search query.
+    ///
+    /// <para>Deadline filters are sent as ISO-8601 ("O") and the upstream converts them to epoch
+    /// milliseconds — Mongo stores a DateTimeOffset as a [ticks, offset] ARRAY, so the scalar
+    /// mirror is the only thing a range query can actually match against.</para>
+    /// </summary>
+    private static string BuildGrantSearchUrl(GrantSearchRequestDto q)
+    {
+        var qs = System.Web.HttpUtility.ParseQueryString(string.Empty);
+
+        if (!string.IsNullOrWhiteSpace(q.Keyword))           qs["Keyword"] = q.Keyword;
+        if (!string.IsNullOrWhiteSpace(q.Category))          qs["Category"] = q.Category;
+        if (!string.IsNullOrWhiteSpace(q.Agency))            qs["Agency"] = q.Agency;
+        if (!string.IsNullOrWhiteSpace(q.Platform))          qs["Platform"] = q.Platform;
+        if (!string.IsNullOrWhiteSpace(q.ApplicantTypeCode)) qs["ApplicantTypeCode"] = q.ApplicantTypeCode;
+        if (!string.IsNullOrWhiteSpace(q.Status))            qs["Status"] = q.Status;
+        if (!string.IsNullOrWhiteSpace(q.SortBy))            qs["SortBy"] = q.SortBy;
+
+        if (q.TribalSetAsideOnly is { } tribal) qs["TribalSetAsideOnly"] = tribal.ToString();
+        if (q.IsForecast is { } forecast)       qs["IsForecast"] = forecast.ToString();
+        if (q.ClosingAfter is { } after)        qs["ClosingAfter"] = after.ToString("O");
+        if (q.ClosingBefore is { } before)      qs["ClosingBefore"] = before.ToString("O");
+        if (q.MinAwardCeiling is { } minCeil)   qs["MinAwardCeiling"] = minCeil.ToString("F2");
+
+        qs["SortDescending"] = q.SortDescending.ToString();
+        qs["Page"]     = Math.Max(1, q.Page).ToString();
+        qs["PageSize"] = Math.Clamp(q.PageSize, 1, 100).ToString();
+
+        var queryString = qs.ToString();
+        return string.IsNullOrEmpty(queryString) ? "api/grants/search" : $"api/grants/search?{queryString}";
+    }
 }
