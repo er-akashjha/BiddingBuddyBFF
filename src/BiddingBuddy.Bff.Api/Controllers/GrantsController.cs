@@ -36,6 +36,31 @@ public class GrantsController(IGrantServicesClient grants) : BffControllerBase
             HasPreviousPage: page.Page > 1));
     }
 
+    /// <summary>
+    /// Filter options present in the corpus, with counts, scoped to a status view.
+    /// Lets the client populate its dropdowns from real data instead of a hardcoded vocabulary.
+    /// </summary>
+    [HttpGet("facets")]
+    [ProducesResponseType(typeof(GrantFacetsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> GetFacets([FromQuery] GrantFacetRequestDto query, CancellationToken ct)
+    {
+        var raw = await grants.GetGrantFacetsAsync(query, ct);
+
+        return Ok(new GrantFacetsDto(
+            Categories:     Map(raw.Categories),
+            ApplicantTypes: Map(raw.ApplicantTypes),
+            Agencies:       Map(raw.Agencies)));
+
+        // Upstream values are nullable strings; a blank is not a selectable filter value, so it is
+        // dropped rather than forwarded as an option that would filter to the empty string.
+        static List<GrantFacetValueDto> Map(List<RawGrantFacetValueDto>? values) =>
+            (values ?? [])
+                .Where(v => !string.IsNullOrWhiteSpace(v.Value))
+                .Select(v => new GrantFacetValueDto(v.Value!, v.Count))
+                .ToList();
+    }
+
     /// <summary>Full detail for one grant, by its GUID-shaped id.</summary>
     [HttpGet("{id}")]
     [ProducesResponseType(typeof(GrantDetailDto), StatusCodes.Status200OK)]

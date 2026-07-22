@@ -1,10 +1,269 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v30**
+Current version: **v34**
+
+---
+
+## v34 — 2026-07-22 03:15 IST
+
+**The EMD register: an org-wide read over every deposit, and one server-computed verdict that
+every EMD surface now shares.** No migration — this is all read-side over `0029`'s tables.
+
+### `EmdVerdict` — the answer moves to the server
+
+`Core/Helpers/EmdVerdict.cs` computes "is this EMD OK?" once. The bid's EMD tab, the register,
+and (next) the reminder emails all render it instead of deriving their own. v26 had this logic in
+`emd-shared.ts` on the client; designing the register showed why that was wrong twice over — the
+deadline scan already computed the same question server-side, and the register needs a verdict the
+bid page has no concept of.
+
+That new one is **`refund_overdue`**: an EMD held past 90 days. It cannot live on the bid page,
+because by the time it fires the bid closed months ago and nobody will open it again. It is the
+clearest argument for the register existing at all — that's real working capital nobody is chasing.
+
+Precedence is the design, and it's pinned by 17 tests. Worst-first, and specifically:
+- A late courier outranks an expiring guarantee — the courier ends the bid this week.
+- A **settled** EMD (refunded/forfeited) reports nothing. Without that check first, an old
+  refunded BG reads "instrument expired" forever and clogs the needs-action filter.
+- A **closed** bid downgrades danger to warn. Nothing can be done; it shouldn't sit in the same
+  red bucket as a bid still winnable.
+- An electronic EMD never asks for a courier — NEFT has no paper.
+
+### Register endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/payments/emd?status=&needsAction=&q=` | The register. Rows carry `verdict` + a courier roll-up, worst-first. |
+| `GET /api/payments/emd/summary` | Org-wide totals — blocked capital, needs-action count, refund-overdue. |
+| `GET /api/payments/emd/{id}/detail` | Deposit + the bid it's attached to + every consignment. |
+
+`needsAction` and the ordering are applied **after** projection because the verdict is computed,
+not stored. That materialises the org's deposits per call — correct for a per-org working set of
+tens to low hundreds, and the alternative (a denormalised status column) goes stale the moment a
+cut-off passes with nobody looking, which is precisely the failure this feature exists to catch.
+
+The detail read matches consignments **by bid, not by `emd_payment_id`** — a dispatch recorded
+before the EMD row existed has a null FK but is still that deposit's courier. Matching on the bid
+catches both; without it the timeline silently drops the early ones.
+
+### Shared projection
+
+`BidDispatchMapper` now owns `Map` + `IsOverdue`. Both the bid tab and the register render
+consignments, and a register calling one late while the bid page called it fine would be worse
+than either surface alone. `BidEmdDto` gains `Verdict`; `EmdPaymentDto` gains `EmdRequirement`,
+`Dispatch` and `Verdict` (all appended and nullable — existing clients unaffected).
+
+264 tests green (17 new), zero build warnings.
+
 
 Convention: every change lands as a new `## vN — YYYY-MM-DD HH:mm IST` entry at the top (newest first). The counter increments by 1 per release, per repo.
 
 ---
+
+## v33 — 2026-07-22 02:30 IST
+
+**A company can no longer be signed up twice, and the person who is blocked can ask to be let
+in.** Requires migration `0030`. Pairs with ui v27.
+
+### The defect
+
+`POST /api/organizations` inserted unconditionally. Nothing anywhere looked up an existing org by
+name, GSTIN, PAN or website, and the table's only unique constraint is `slug` — which onboarding
+never sets, so it is always NULL, and Postgres permits unlimited NULLs in a UNIQUE column.
+
+So the second person from a company to sign up silently became the **owner of an empty parallel
+workspace**: same legal entity, disjoint bids, documents, compliance and alert rules, neither side
+ever seeing the other. The only recovery was out-of-band — an admin in the real org had to invite
+them by email.
+
+### Two signals, deliberately different strengths
+
+| Signal | Verdict |
+|---|---|
+| **GSTIN** matches an active org | **Hard block**, 409, no override — one GSTIN is one legal entity |
+| **Company name** matches | **Soft warn**, 409 with `canOverride: true` — unrelated firms genuinely share names, so the user may create a separate workspace anyway |
+
+GSTIN comparison normalizes case and whitespace, because users paste them off invoices where they
+are routinely spaced and cased differently; comparing raw would let one registration through under
+three spellings and defeat the check. Name comparison strips legal-form suffixes, so
+`Acme Pvt Ltd` and `ACME Private Limited` both reduce to `acme`.
+
+`AllowDuplicateName` is consent to a *name* coincidence and is explicitly **not** honoured for a
+GSTIN match — otherwise the override would bypass the one signal that is actually conclusive.
+
+Name candidates are fetched by **prefix** (`lower(name) LIKE 'acme%'`, index-servable) and then
+compared exactly in C#, since the database cannot run the suffix-stripping rules. The cost is
+asymmetry: *"The Acme Company"* finds *"Acme Pvt Ltd"*, but not the reverse. Only the soft signal
+is affected — anyone who supplies a GSTIN is caught regardless of spelling.
+
+### Request to join
+
+New `org_join_requests` table and a flow that mirrors invites pointing the other way. The rule both
+share: **a request never grants access.** An owner or admin decides, and picks the role while
+deciding — `owner` is not grantable, since `organizations.owned_by` already names one and
+`RemoveMemberAsync` refuses to remove an owner, so a second would be unremovable.
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/join-requests` | JWT, **no X-Org-Id** |
+| GET | `/api/join-requests/mine` | JWT, no X-Org-Id |
+| POST | `/api/join-requests/{id}/cancel` | JWT, no X-Org-Id |
+| GET | `/api/organizations/{id}/join-requests` | JWT + X-Org-Id, owner/admin |
+| POST | `/api/organizations/{id}/join-requests/{reqId}/approve` | JWT + X-Org-Id, owner/admin |
+| POST | `/api/organizations/{id}/join-requests/{reqId}/reject` | JWT + X-Org-Id, owner/admin |
+
+The first three are exempt from `OrgContextMiddleware` for the same reason `/api/invites` is: the
+caller is by definition not a member of the org they are pointing at. Asking twice returns the
+existing pending row rather than stacking rows in the approver's queue.
+
+Templates `JOIN_REQUEST`, `JOIN_REQUEST_APPROVED` and `JOIN_REQUEST_REJECTED` are seeded by `0030`,
+Email + InApp. One JOIN_REQUEST notification is sent **per approver**, not one addressed to all —
+the template greets by name, so a single fan-out would call every admin but one by the wrong name.
+All publishes are fire-and-forget: a notification failure never fails a decision already committed.
+
+### What the 409 does not say
+
+The body carries the matched org's name, city and member count — enough to recognise your own
+employer — and **no admin name or email, not even masked.** The join flow routes to admins
+automatically, so the client never needs to answer "who do I ask", and publishing it would hand
+whoever guessed a (publicly printed) GSTIN a named target. The `existingRequest` field is scoped to
+the caller, so it cannot leak which colleagues are also waiting.
+
+### Why there is no UNIQUE constraint on GSTIN
+
+The obvious guarantee, and not safe to add blind: the check has never existed, so **production may
+already hold duplicate GSTINs**, and `CREATE UNIQUE INDEX` would abort the migration on exactly the
+databases that most need the fix. `0030` creates a non-unique index and raises a `NOTICE` listing
+any duplicate groups instead. **Read that output on deploy** — reconciling those rows is manual,
+and promoting the index to UNIQUE afterwards is a one-line follow-up.
+
+Until then the guarantee is application-level, and two simultaneous signups with the same GSTIN can
+both still succeed. Not worth a table lock: the window is milliseconds against a flow measured in
+minutes.
+
+### Not done
+
+The **password-signup path is still unguarded** — `AuthService.CreateVerifiedAccountAsync` calls
+`orgRepo.CreateAsync` directly and can still mint a duplicate. Guarding it belongs at
+`POST /api/auth/register`, *before* the OTP, because failing at verify time would strand a user who
+has already proved their email with no organization at all; that needs its own handling on
+`SignupPage`, so it is deliberately a separate change. Exposure is limited: auth here is
+social-primary, and OAuth signups are org-less by construction, so they all pass through the
+guarded endpoint.
+
+There is also no **merge tool** — duplicates that already exist stay duplicated. Approving a join
+request puts the person in the right workspace; it does not move data out of the wrong one.
+
+### Verification
+
+`dotnet build` clean (0 warnings), `dotnet test` **247/247 green**, including 30 new tests across
+`OrgDuplicateDetectionTests` and `OrgJoinRequestTests`.
+
+Worth knowing what those do *not* prove: the tests run on the EF **in-memory** provider, which
+enforces neither foreign keys nor partial unique indexes. They pin service behaviour only — the
+`0030` constraints themselves are unverified until the migration runs against real Postgres, and
+nothing here has been exercised against a live database or browser.
+
+---
+
+## v32 — 2026-07-22 02:20 IST
+
+**EMD instrument details + courier tracking on a bid.** Migration `0029`. Plan: `docs/emd-courier/PLAN.md`.
+
+The *money* side of EMD already existed — `emd_payments`, `/api/payments/emd`, and the `EMD_STUCK`
+refund chase. What was missing is the *instrument* side: an EMD furnished as a demand draft, bank
+guarantee or FDR is a piece of paper whose **original has to physically reach the buyer before
+technical-bid opening**, and nothing in the system tracked that leg. A late envelope is treated as
+no EMD at all, however good the bid.
+
+### Schema (`0029`)
+
+- **`emd_payments` gains an instrument block** — `instrument_number`, `instrument_date`,
+  `valid_until`, `issuing_branch`, `favouring`, `due_date`, and `document_id` (the scan, linked
+  from the org vault, never copied — `documents.folder_id` is a single FK, so filing would *move*
+  the doc out of the vault; same reasoning as `bid_documents`).
+- **Both CHECK constraints widened.** `payment_mode` knew only online rails + DD and could not
+  express a BG, FDR, surety bond or an exemption; `status` gains `pending` and `submitted`, states
+  that exist before `held` and had nowhere to live. ⚠ `emd_payments` **predates DbMigrator** (it
+  came from `database/schema.sql` by hand, not from any `0001`–`0028` script), so its constraint
+  names are not guaranteed — the migration drops them by **lookup over `pg_constraint`**, not by
+  name, which also makes the block re-runnable.
+- **`bid_dispatches`** — the physical leg. Its own table rather than courier columns on
+  `emd_payments`, because one EMD can have several dispatches: a consignment returned undelivered
+  must be re-sent, and the refund instrument travels back `inbound`. One column-set cannot hold
+  both. `purpose` is deliberately wider than EMD (`hard_copy_bid`, `sample`) so those reuse it
+  without another migration; only the EMD case is exposed in the UI.
+- **`bids.emd_requirement`** (`unknown|required|exempt|not_required`) + `emd_exemption_basis`.
+  Only `required` arms the alerts, which is why the default is `unknown` rather than a guess.
+- **`ux_emd_payments_bid` (one EMD per bid) is created GUARDED** — skipped with a `RAISE WARNING`
+  if duplicate rows already exist. A migration that hard-fails on pre-existing data blocks every
+  later script in the chain, and whether any org already has two EMD rows against one bid is not
+  knowable from here. `BidEmdService` takes the newest row, so the feature is correct in an
+  environment where the index never gets created.
+
+### API
+
+`GET|PUT /api/bids/{id}/emd`, `POST /api/bids/{id}/dispatches`,
+`PATCH|DELETE /api/bids/{id}/dispatches/{dispatchId}`. `/api/payments/emd` is unchanged; the
+EMD row is shared, so recording from the bid page and from Payments produce one row, not two views
+that drift. `EmdPaymentDto` gains the instrument fields **appended** (existing clients unaffected)
+plus a server-derived `requiresPhysicalDispatch`, so no client re-derives the instrument list.
+
+### Alerts
+
+Three codes on the existing `notification_reminders` rail, all deep-linking to `/bids/{id}?tab=emd`:
+
+| Code | Fires when | To |
+|---|---|---|
+| `EMD_DISPATCH_DUE` | instrument EMD, no live outbound consignment, cut-off inside `EmdDispatchLeadDays` (7) | assignee, else bid managers |
+| `EMD_DELIVERY_OVERDUE` | dispatched/in-transit, past expected date or cut-off, not delivered | assignee, else bid managers |
+| `EMD_BG_EXPIRING` | BG/FDR/surety `valid_until` inside `EmdExpiryLeadDays` (21) | finance — extending a BG is a bank errand |
+
+`returned`/`lost` consignments deliberately do **not** count as sent: the buyer never got them, so
+the EMD is still effectively un-dispatched and `EMD_DISPATCH_DUE` must keep applying.
+
+### Note for reviewers
+
+New rows are linked by **navigation property** (`Bid = bid`), never by scalar (`BidId = bid.Id`).
+The scalar form lets EF order the INSERTs wrong and throws `23503` — the bug that took out
+workspace creation before v26. The in-memory test provider enforces no FKs, so **the suite stays
+green through that failure**; it needs a real-Postgres check. 31 new tests (210 total, all green).
+
+## v31 — 2026-07-21 22:05 IST
+
+**`GET /api/grants/facets`, and `AwardFloor` on the grant list DTO.** Both exist to stop the SPA
+stating things the data does not support.
+
+### Facets
+
+Proxies BiddingBuddyServices' new facet endpoint (Services v13) and maps it to `GrantFacetsDto`:
+categories, applicant-type codes and agencies that exist in the corpus, each with a count.
+Without it the client cannot render its own filter options at all — it was carrying a hand-synced
+copy of the Grants.gov vocabulary whose values mostly return nothing.
+
+`GetGrantFacetsAsync` returns empty lists rather than null when upstream is unreachable: the client
+renders a dropdown from these, and "no options to offer" is recoverable where a null is a broken
+page. Blank values are dropped at the mapping boundary — forwarding `""` would offer an option that
+filters to the empty string.
+
+### AwardFloor on the list
+
+`GrantListItemDto` carried only `AwardCeiling`, so every row in the SPA's grant list could only say
+*"Up to $250K"* — which reads as a cap on an unknown range rather than the range itself. The floor
+was already on the detail DTO and already parsed from Mongo; it simply was not carried across.
+Both stay nullable: an absent figure means the agency published none, and rendering either as 0
+would claim the grant awards nothing.
+
+Inserted next to `AwardCeiling` rather than appended. The append-only rule in
+`IGrantServicesClient` protects `UpsertGrantDto`, which BidProcessor constructs positionally across
+an independent deploy; `GrantListItemDto` is built inside this assembly with named arguments and
+consumed as JSON by name, and the differing types mean any positional construction would fail to
+compile rather than silently shift.
+
+### Verification
+
+Builds clean, 0 warnings. Route precedence puts the literal `facets` segment ahead of `{id}`, so
+the new endpoint does not shadow grant lookup. **Not exercised against a running Services instance.**
 
 ## v30 — 2026-07-20 16:28 IST
 

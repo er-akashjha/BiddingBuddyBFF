@@ -14,7 +14,8 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 public class BidsController(
     IBidService bidService,
     IBidAttachmentService attachmentService,
-    IBidDocumentService documentService) : BffControllerBase
+    IBidDocumentService documentService,
+    IBidEmdService emdService) : BffControllerBase
 {
     /// <summary>
     /// Paginated list of bids for the org. Filter by <c>stage</c>
@@ -296,6 +297,78 @@ public class BidsController(
     public async Task<IActionResult> UnlinkDocument(Guid id, Guid documentId, CancellationToken ct)
     {
         await documentService.UnlinkAsync(CurrentOrgId, id, documentId, ct);
+        return NoContent();
+    }
+
+    // ── EMD + courier dispatch ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// The bid's EMD picture: whether one is required, the money/instrument record, and every
+    /// courier leg. <c>emd</c> is null when nothing has been recorded yet — that's the empty
+    /// state, not an error. 404 only if the bid isn't this org's.
+    /// </summary>
+    [HttpGet("{id:guid}/emd")]
+    [ProducesResponseType(typeof(BidEmdDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetEmd(Guid id, CancellationToken ct)
+    {
+        var result = await emdService.GetAsync(CurrentOrgId, id, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Upsert the bid's EMD — creates the record on first save, patches it after. Null fields
+    /// are left alone. Setting <c>requirement</c> to <c>exempt</c>/<c>not_required</c> records
+    /// that answer without creating a money row.
+    /// </summary>
+    [HttpPut("{id:guid}/emd")]
+    [ProducesResponseType(typeof(BidEmdDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SaveEmd(Guid id, [FromBody] SaveBidEmdDto dto, CancellationToken ct)
+    {
+        var result = await emdService.SaveAsync(CurrentOrgId, id, CurrentUserId, dto, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Record a physical consignment for the bid — in practice the courier carrying the EMD
+    /// instrument's original to the buyer. Auto-links to the bid's EMD record when
+    /// <c>purpose</c> is <c>emd_instrument</c>, and defaults <c>deliverBy</c> to the bid's
+    /// due date.
+    /// </summary>
+    [HttpPost("{id:guid}/dispatches")]
+    [ProducesResponseType(typeof(BidDispatchDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CreateDispatch(Guid id, [FromBody] CreateBidDispatchDto dto, CancellationToken ct)
+    {
+        var result = await emdService.CreateDispatchAsync(CurrentOrgId, id, CurrentUserId, dto, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Update a consignment as it moves. Sending <c>deliveredOn</c> alone also flips the status
+    /// to <c>delivered</c>, so marking arrival is one call.
+    /// </summary>
+    [HttpPatch("{id:guid}/dispatches/{dispatchId:guid}")]
+    [ProducesResponseType(typeof(BidDispatchDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateDispatch(
+        Guid id, Guid dispatchId, [FromBody] UpdateBidDispatchDto dto, CancellationToken ct)
+    {
+        var result = await emdService.UpdateDispatchAsync(CurrentOrgId, id, dispatchId, CurrentUserId, dto, ct);
+        return Ok(result);
+    }
+
+    /// <summary>Delete a consignment record. The EMD and any linked documents are untouched.</summary>
+    [HttpDelete("{id:guid}/dispatches/{dispatchId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteDispatch(Guid id, Guid dispatchId, CancellationToken ct)
+    {
+        await emdService.DeleteDispatchAsync(CurrentOrgId, id, dispatchId, ct);
         return NoContent();
     }
 }

@@ -26,4 +26,14 @@ public class DeadlineScanOptions
 
     /// <summary>An EMD held at least this many days (since payment) is flagged as stuck working capital.</summary>
     public int EmdStuckDays { get; set; } = 90;
+
+    /// <summary>
+    /// Lead window (days) for "the EMD instrument still hasn't been couriered". Wider than the
+    /// bid-due window on purpose: arranging a DD or BG at a bank branch and getting it across
+    /// the country takes most of a week, so a 3-day warning is already too late to act on.
+    /// </summary>
+    public int EmdDispatchLeadDays { get; set; } = 7;
+
+    /// <summary>Lead window (days) for the "bank guarantee is about to expire" reminder.</summary>
+    public int EmdExpiryLeadDays { get; set; } = 21;
 }

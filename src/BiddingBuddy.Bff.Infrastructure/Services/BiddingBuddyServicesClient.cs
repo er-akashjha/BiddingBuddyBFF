@@ -589,6 +589,24 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient, IGrantSer
         return page ?? new RawGrantPageDto([], 0, query.Page, query.PageSize, 0);
     }
 
+    /// <inheritdoc/>
+    public async Task<RawGrantFacetsDto> GetGrantFacetsAsync(
+        GrantFacetRequestDto query, CancellationToken ct = default)
+    {
+        var qs = System.Web.HttpUtility.ParseQueryString(string.Empty);
+        if (!string.IsNullOrWhiteSpace(query.Status))   qs["Status"] = query.Status;
+        if (!string.IsNullOrWhiteSpace(query.Platform)) qs["Platform"] = query.Platform;
+        if (query.IsForecast is { } forecast)           qs["IsForecast"] = forecast.ToString();
+        qs["Limit"] = Math.Clamp(query.Limit, 1, 500).ToString();
+
+        var url    = $"api/grants/facets?{qs}";
+        var facets = await GetJsonOrNullAsync<RawGrantFacetsDto>(url, ct);
+
+        // Empty lists, not null: the client renders a dropdown from these, and an unreachable
+        // upstream should mean "no options to offer" rather than a broken page.
+        return facets ?? new RawGrantFacetsDto([], [], []);
+    }
+
     /// <summary>
     /// Builds the upstream search query.
     ///

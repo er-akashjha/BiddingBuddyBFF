@@ -1,4 +1,5 @@
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
+using BiddingBuddy.Bff.Core.Exceptions;
 using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,16 +10,35 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Route("api/organizations")]
 [Authorize]
 [Produces("application/json")]
-public class OrganizationsController(IOrganizationService orgService) : BffControllerBase
+public class OrganizationsController(
+    IOrganizationService orgService,
+    IJoinRequestService joinRequests) : BffControllerBase
 {
-    /// <summary>Create a new organization. The calling user becomes the owner.</summary>
+    /// <summary>
+    /// Create a new organization. The calling user becomes the owner.
+    ///
+    /// <para>409 <c>ORG_EXISTS</c> when the company already has a workspace. The body carries
+    /// the matched org and whether the match can be overridden, so the client can offer
+    /// "request to join" instead of a dead end — see <see cref="OrgExistsDto"/>.</para>
+    /// </summary>
     [HttpPost]
     [ProducesResponseType(typeof(OrgDetailDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(OrgExistsDto), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Create([FromBody] CreateOrgDto dto, CancellationToken ct)
     {
-        var org = await orgService.CreateAsync(CurrentUserId, dto, ct);
-        return CreatedAtAction(nameof(Get), new { id = org.Id }, org);
+        try
+        {
+            var org = await orgService.CreateAsync(CurrentUserId, dto, ct);
+            return CreatedAtAction(nameof(Get), new { id = org.Id }, org);
+        }
+        catch (DuplicateOrganizationException ex)
+        {
+            // Caught here rather than left to GlobalExceptionHandler: that maps to a bare
+            // ProblemDetails and would drop the payload, leaving the SPA able to see
+            // "conflict" but not which organization it conflicted with.
+            return Conflict(ex.Conflict);
+        }
     }
 
     /// <summary>Get organization detail including member list.</summary>
@@ -119,6 +139,65 @@ public class OrganizationsController(IOrganizationService orgService) : BffContr
     {
         await orgService.RevokePendingInviteAsync(id, inviteId, CurrentUserId, ct);
         return NoContent();
+    }
+
+    // ── Join requests (decision side) ────────────────────────────────────────
+    //
+    // The requester-facing half is /api/join-requests, which runs without org context.
+    // These are org-scoped because the caller IS a member here — X-Org-Id is present and
+    // the service applies the owner/admin gate on top.
+
+    /// <summary>Pending requests to join this org, oldest first. Owner/admin only.</summary>
+    [HttpGet("{id:guid}/join-requests")]
+    [ProducesResponseType(typeof(IReadOnlyList<OrgJoinRequestDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetJoinRequests(Guid id, CancellationToken ct)
+        => Ok(await joinRequests.GetPendingForOrgAsync(id, CurrentUserId, ct));
+
+    /// <summary>
+    /// Approve a join request → the requester becomes a member with the role chosen here.
+    /// Owner/admin only. The role comes from the approver, never from the request.
+    /// </summary>
+    [HttpPost("{id:guid}/join-requests/{requestId:guid}/approve")]
+    [ProducesResponseType(typeof(OrgMemberDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ApproveJoinRequest(
+        Guid id, Guid requestId, [FromBody] ApproveJoinRequestDto dto, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await joinRequests.ApproveAsync(id, requestId, CurrentUserId, dto, ct));
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "REQUEST_ALREADY_DECIDED")
+        {
+            // Two admins opened the queue at once. The first decision stands.
+            return Conflict(new { error = "REQUEST_ALREADY_DECIDED" });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "INVALID_ROLE")
+        {
+            return BadRequest(new { error = "INVALID_ROLE" });
+        }
+    }
+
+    /// <summary>Decline a join request. Owner/admin only.</summary>
+    [HttpPost("{id:guid}/join-requests/{requestId:guid}/reject")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RejectJoinRequest(Guid id, Guid requestId, CancellationToken ct)
+    {
+        try
+        {
+            await joinRequests.RejectAsync(id, requestId, CurrentUserId, ct);
+            return NoContent();
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "REQUEST_ALREADY_DECIDED")
+        {
+            return Conflict(new { error = "REQUEST_ALREADY_DECIDED" });
+        }
     }
 
     /// <summary>Update a member's role or department (owner or admin only).</summary>

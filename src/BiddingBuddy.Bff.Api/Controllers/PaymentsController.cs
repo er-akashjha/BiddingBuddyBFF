@@ -14,17 +14,41 @@ public class PaymentsController(IPaymentService paymentService) : BffControllerB
 {
     // ── EMD Payments ──────────────────────────────────────────────────────────
 
-    /// <summary>Paginated list of EMD payments. Filter by status (held|refunded|forfeited).</summary>
+    /// <summary>
+    /// The EMD register. Every row carries a server-computed <c>verdict</c> (courier_late,
+    /// not_couriered, refund_overdue, …) and a courier roll-up, and rows come back worst-first,
+    /// so the client renders status rather than deriving it.
+    /// </summary>
+    /// <param name="status">held|submitted|pending|refunded|forfeited. Omit for all.</param>
+    /// <param name="needsAction">Only deposits whose verdict is danger or warn.</param>
+    /// <param name="q">Free text over tender title, bid title, GeM ref and instrument number.</param>
+    /// <param name="page">1-based page number.</param>
+    /// <param name="pageSize">Rows per page, clamped to 1–100.</param>
+    /// <param name="ct">Cancellation token.</param>
     [HttpGet("emd")]
     [ProducesResponseType(typeof(PagedResult<EmdPaymentDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> ListEmd(
         [FromQuery] string? status,
+        [FromQuery] bool needsAction = false,
+        [FromQuery] string? q = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
         CancellationToken ct = default)
     {
-        var result = await paymentService.ListEmdAsync(CurrentOrgId, status, page, pageSize, ct);
+        var result = await paymentService.ListEmdAsync(CurrentOrgId, status, needsAction, q, page, pageSize, ct);
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Org-wide EMD totals for the register header — blocked capital, how many need action, and
+    /// what is overdue for refund. Computed over every deposit, not the current page.
+    /// </summary>
+    [HttpGet("emd/summary")]
+    [ProducesResponseType(typeof(EmdRegisterSummaryDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetEmdSummary(CancellationToken ct)
+    {
+        var summary = await paymentService.GetEmdSummaryAsync(CurrentOrgId, ct);
+        return Ok(summary);
     }
 
     /// <summary>Get a single EMD payment record.</summary>
@@ -35,6 +59,19 @@ public class PaymentsController(IPaymentService paymentService) : BffControllerB
     {
         var emd = await paymentService.GetEmdAsync(id, CurrentOrgId, ct);
         return Ok(emd);
+    }
+
+    /// <summary>
+    /// Full record behind a register row: the deposit with its verdict, the bid it is attached
+    /// to (stage, deadline, owner), and every consignment in dispatch order.
+    /// </summary>
+    [HttpGet("emd/{id:guid}/detail")]
+    [ProducesResponseType(typeof(EmdDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetEmdDetail(Guid id, CancellationToken ct)
+    {
+        var detail = await paymentService.GetEmdDetailAsync(id, CurrentOrgId, ct);
+        return Ok(detail);
     }
 
     /// <summary>Record a new EMD payment.</summary>

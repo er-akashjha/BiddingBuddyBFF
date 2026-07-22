@@ -21,6 +21,13 @@ public interface IGrantServicesClient
 
     /// <summary>Paged grant search proxied to <c>/api/grants/search</c>.</summary>
     Task<RawGrantPageDto> SearchGrantsAsync(GrantSearchRequestDto query, CancellationToken ct = default);
+
+    /// <summary>
+    /// Populated filter options with counts, proxied to <c>/api/grants/facets</c>. Returns empty
+    /// lists rather than null when upstream is unreachable — a filter with no options degrades to
+    /// "no filtering available", which is recoverable; a null would take the whole page down.
+    /// </summary>
+    Task<RawGrantFacetsDto> GetGrantFacetsAsync(GrantFacetRequestDto query, CancellationToken ct = default);
 }
 
 // ── Raw wire shapes from BiddingBuddyServices ────────────────────────────────
@@ -111,3 +118,10 @@ public record GrantAiItemDto(
     DateTime? GeneratedAt);
 
 public record GrantStatusItemDto(string? State);
+
+public record RawGrantFacetsDto(
+    List<RawGrantFacetValueDto>? Categories,
+    List<RawGrantFacetValueDto>? ApplicantTypes,
+    List<RawGrantFacetValueDto>? Agencies);
+
+public record RawGrantFacetValueDto(string? Value, long Count);
