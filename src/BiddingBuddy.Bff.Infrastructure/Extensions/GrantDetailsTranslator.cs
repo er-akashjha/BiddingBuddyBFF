@@ -42,6 +42,7 @@ public static class GrantDetailsTranslator
                 Category:          item.Category?.Primary,
                 Currency:          item.Funding?.Currency ?? "USD",
                 AwardCeiling:      item.Funding?.AwardCeiling,
+                AwardFloor:        item.Funding?.AwardFloor,
                 CloseDate:         closeDate,
                 CloseDateExplanation: item.Timeline?.CloseDateExplanation,
                 IsRolling:         item.Timeline?.IsRolling ?? false,

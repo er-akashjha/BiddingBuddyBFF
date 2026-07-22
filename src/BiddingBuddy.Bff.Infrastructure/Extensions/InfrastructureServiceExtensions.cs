@@ -88,11 +88,13 @@ public static class InfrastructureServiceExtensions
 
         // Domain services
         services.AddScoped<IOrganizationService, OrganizationService>();
+        services.AddScoped<IJoinRequestService, JoinRequestService>();
         services.AddScoped<ITenderService, TenderService>();
         services.AddScoped<ISavedFilterService, SavedFilterService>();
         services.AddScoped<IBidService, BidService>();
         services.AddScoped<IBidAttachmentService, BidAttachmentService>();
         services.AddScoped<IBidDocumentService, BidDocumentService>();
+        services.AddScoped<IBidEmdService, BidEmdService>();
         services.AddScoped<IComplianceService, ComplianceService>();
         services.AddScoped<IDocumentService, DocumentService>();
         services.AddScoped<IOrderService, OrderService>();

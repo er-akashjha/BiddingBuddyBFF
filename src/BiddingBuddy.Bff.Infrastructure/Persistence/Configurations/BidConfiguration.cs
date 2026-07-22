@@ -30,6 +30,8 @@ public class BidConfiguration : IEntityTypeConfiguration<Bid>
         b.Property(x => x.ProgressPct).HasColumnName("progress_pct").HasDefaultValue(0);
         b.Property(x => x.LossReason).HasColumnName("loss_reason");
         b.Property(x => x.WonValue).HasColumnName("won_value").HasPrecision(15, 2);
+        b.Property(x => x.EmdRequirement).HasColumnName("emd_requirement").HasDefaultValue("unknown");
+        b.Property(x => x.EmdExemptionBasis).HasColumnName("emd_exemption_basis");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
 

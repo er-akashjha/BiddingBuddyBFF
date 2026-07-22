@@ -164,6 +164,37 @@ CREATE TABLE org_members (
 CREATE INDEX idx_org_members_user_id ON org_members (user_id);
 CREATE INDEX idx_org_members_org_id  ON org_members (org_id);
 
+-- A person asking to be let into an org that already exists — the mirror of
+-- organization_invites. Raised when signup is blocked as a duplicate (same GSTIN,
+-- or the user recognised their company by name). Membership is granted only when
+-- an owner/admin approves, and they pick the role at that moment. Migration 0030.
+CREATE TABLE org_join_requests (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','approved','rejected','cancelled')),
+  message     TEXT,                        -- optional note from the requester
+  role        TEXT,                        -- granted role; NULL until decided
+  decided_by  UUID REFERENCES users(id),
+  decided_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One LIVE request per (org, user); decided rows accumulate as history.
+CREATE UNIQUE INDEX uq_join_requests_one_pending_per_user_per_org
+  ON org_join_requests (org_id, user_id) WHERE status = 'pending';
+CREATE INDEX ix_join_requests_org_status ON org_join_requests (org_id, status, created_at DESC);
+CREATE INDEX ix_join_requests_user       ON org_join_requests (user_id, created_at DESC);
+
+-- Duplicate-signup probe indexes (migration 0030). The GSTIN expression must stay
+-- byte-identical to what OrganizationService emits, or the probe silently seq-scans.
+-- Deliberately NOT unique — see docs/org-join-requests/PLAN.md §2.
+CREATE INDEX ix_organizations_gstin_normalized
+  ON organizations (upper(replace(gstin, ' ', ''))) WHERE gstin IS NOT NULL;
+CREATE INDEX ix_organizations_name_lower
+  ON organizations (lower(name) text_pattern_ops);
+
 -- ─────────────────────────────────────────────────────────────────
 -- 3. TENDERS  (pipeline-owned, no org_id)
 -- ─────────────────────────────────────────────────────────────────
@@ -270,6 +301,11 @@ CREATE TABLE bids (
   progress_pct     INT NOT NULL DEFAULT 0,
   loss_reason      TEXT,
   won_value        NUMERIC(15,2),
+  -- Is an EMD needed at all? (migration 0029) Seeded from the tender's emd_amount, then
+  -- overridable — MSME/NSIC/Startup exemption is common. Only 'required' arms the EMD alerts.
+  emd_requirement  TEXT NOT NULL DEFAULT 'unknown'
+                     CHECK (emd_requirement IN ('unknown','required','exempt','not_required')),
+  emd_exemption_basis TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -529,24 +565,85 @@ CREATE TABLE emd_payments (
   tender_title     TEXT,
   amount           NUMERIC(15,2) NOT NULL,
   payment_date     DATE NOT NULL,
-  payment_mode     TEXT CHECK (payment_mode IN ('neft','rtgs','upi','dd','online')),
+  -- Widened by migration 0029: the original list knew only online rails + DD, which cannot
+  -- express a bank guarantee, FDR, surety bond or an MSME exemption.
+  payment_mode     TEXT CHECK (payment_mode IN (
+                     'neft','rtgs','upi','online',                    -- electronic
+                     'dd','bg','fdr','bankers_cheque','surety_bond',  -- physical instrument
+                     'exempt')),
   transaction_ref  TEXT,
   bank_name        TEXT,
   status           TEXT NOT NULL DEFAULT 'held'
-                     CHECK (status IN ('held','refunded','forfeited')),
+                     CHECK (status IN ('pending','submitted','held','refunded','forfeited')),
   refund_date      DATE,
   refund_amount    NUMERIC(15,2),
   refund_ref       TEXT,
   notes            TEXT,
+  -- Instrument details (migration 0029) — null unless payment_mode is a physical instrument.
+  instrument_number TEXT,
+  instrument_date   DATE,
+  valid_until       DATE,      -- BG/FDR expiry; watched by EMD_BG_EXPIRING
+  issuing_branch    TEXT,
+  favouring         TEXT,      -- payee, e.g. "Pay & Accounts Officer, ..."
+  due_date          DATE,      -- when the EMD must be in place (usually bid submission)
+  document_id       UUID REFERENCES documents(id) ON DELETE SET NULL,  -- scan, linked from the vault
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_emd_org    ON emd_payments (org_id);
 CREATE INDEX idx_emd_status ON emd_payments (status);
+-- One EMD per bid. Migration 0029 creates this GUARDED (skipped where duplicate rows already
+-- exist), so BidEmdService must stay correct without it — it takes the newest row.
+CREATE UNIQUE INDEX ux_emd_payments_bid ON emd_payments (bid_id) WHERE bid_id IS NOT NULL;
+CREATE INDEX idx_emd_payments_valid_until ON emd_payments (valid_until) WHERE valid_until IS NOT NULL;
 
 CREATE TRIGGER trg_emd_payments_updated_at
   BEFORE UPDATE ON emd_payments
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- The physical leg of an EMD instrument: the courier that carries the ORIGINAL paper to the
+-- buyer before technical-bid opening. Its own table rather than columns on emd_payments
+-- because one EMD can have several dispatches — a returned consignment must be re-sent, and
+-- the refund instrument travels back inbound.
+CREATE TABLE bid_dispatches (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id               UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  bid_id               UUID NOT NULL REFERENCES bids(id)          ON DELETE CASCADE,
+  emd_payment_id       UUID REFERENCES emd_payments(id) ON DELETE SET NULL,
+  purpose              TEXT NOT NULL DEFAULT 'emd_instrument'
+                         CHECK (purpose IN ('emd_instrument','hard_copy_bid','sample','other')),
+  direction            TEXT NOT NULL DEFAULT 'outbound'
+                         CHECK (direction IN ('outbound','inbound')),
+  courier_name         TEXT,
+  tracking_number      TEXT,
+  tracking_url         TEXT,
+  dispatched_on        DATE,
+  dispatched_by        UUID REFERENCES users(id),
+  recipient_name        TEXT,
+  recipient_designation TEXT,
+  recipient_address     TEXT,
+  recipient_phone       TEXT,
+  deliver_by           DATE,   -- the tender's hard cut-off; what the alerts key off
+  expected_delivery_on DATE,   -- merely the courier's own promise
+  delivered_on         DATE,
+  received_by          TEXT,
+  status               TEXT NOT NULL DEFAULT 'draft'
+                         CHECK (status IN ('draft','dispatched','in_transit','delivered','returned','lost')),
+  pod_document_id      UUID REFERENCES documents(id) ON DELETE SET NULL,
+  notes                TEXT,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bid_dispatches_bid  ON bid_dispatches (bid_id);
+CREATE INDEX idx_bid_dispatches_org  ON bid_dispatches (org_id);
+CREATE INDEX idx_bid_dispatches_emd  ON bid_dispatches (emd_payment_id);
+CREATE INDEX idx_bid_dispatches_open ON bid_dispatches (status, expected_delivery_on)
+  WHERE status IN ('dispatched','in_transit');
+
+CREATE TRIGGER trg_bid_dispatches_updated_at
+  BEFORE UPDATE ON bid_dispatches
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE invoices (
