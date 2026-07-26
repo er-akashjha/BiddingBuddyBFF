@@ -1,3 +1,4 @@
+using BiddingBuddy.Bff.Core.DTOs.Auth;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
 using BiddingBuddy.Bff.Core.Exceptions;
 using BiddingBuddy.Bff.Core.Interfaces;
@@ -12,8 +13,70 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Produces("application/json")]
 public class OrganizationsController(
     IOrganizationService orgService,
-    IJoinRequestService joinRequests) : BffControllerBase
+    IJoinRequestService joinRequests,
+    IBuyerRequestService buyerRequests,
+    ISsoService ssoService) : BffControllerBase
 {
+    // ── Buyer access requests ────────────────────────────────────────────────
+    //
+    // The self-serve front door to becoming a buyer. An owner/admin raises the request here; an
+    // operator decides it on the /internal side. There is deliberately no client route that grants
+    // buyer status — a department publishing under a government name is a trust decision the
+    // platform makes, not one a tenant self-asserts.
+
+    /// <summary>Raise (or return the existing pending) buyer-access request for the active org.</summary>
+    [HttpPost("buyer-request")]
+    [ProducesResponseType(typeof(BuyerRequestDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RequestBuyerAccess([FromBody] RequestBuyerAccessDto dto, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await buyerRequests.RequestAsync(CurrentOrgId, CurrentUserId, dto, ct));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message, code = "FORBIDDEN_ROLE" });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "ALREADY_BUYER")
+        {
+            return Conflict(new { error = "This organization can already publish tenders.", code = "ALREADY_BUYER" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>The active org's current or most recent buyer request (drives the Settings card).</summary>
+    [HttpGet("buyer-request")]
+    [ProducesResponseType(typeof(BuyerRequestDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> GetBuyerRequest(CancellationToken ct)
+    {
+        var request = await buyerRequests.GetCurrentAsync(CurrentOrgId, ct);
+        return request is null ? NoContent() : Ok(request);
+    }
+
+    /// <summary>Withdraw the pending buyer request. Owner/admin only.</summary>
+    [HttpPost("buyer-request/cancel")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CancelBuyerRequest(CancellationToken ct)
+    {
+        try
+        {
+            return await buyerRequests.CancelAsync(CurrentOrgId, CurrentUserId, ct) ? NoContent() : NotFound();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message, code = "FORBIDDEN_ROLE" });
+        }
+    }
+
     /// <summary>
     /// Create a new organization. The calling user becomes the owner.
     ///
@@ -218,5 +281,76 @@ public class OrganizationsController(
     {
         await orgService.RemoveMemberAsync(id, memberId, CurrentUserId, ct);
         return NoContent();
+    }
+
+    // ── Single sign-on ───────────────────────────────────────────────────────
+
+    /// <summary>The org's SSO configuration, plus whether the caller is in a position to change it.</summary>
+    [HttpGet("{id:guid}/sso")]
+    [ProducesResponseType(typeof(OrgSsoSettingsDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetSso(Guid id, CancellationToken ct)
+        => Ok(await ssoService.GetSettingsAsync(id, CurrentUserId, ct));
+
+    /// <summary>
+    /// Connect this workspace to a Microsoft Entra directory, so anyone from it signs straight in.
+    /// </summary>
+    /// <remarks>
+    /// The tenant is taken from the caller's own Microsoft identity — the body carries only the role
+    /// to grant. You can bind the directory you have proven you belong to and no other, which is why
+    /// there is no tenant id to pass and no way to claim someone else's.
+    /// </remarks>
+    [HttpPost("{id:guid}/sso/entra")]
+    [ProducesResponseType(typeof(OrgSsoSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> BindSso(Guid id, [FromBody] BindEntraTenantDto dto, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await ssoService.BindEntraTenantAsync(id, CurrentUserId, dto, ct));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only an owner or admin can change single sign-on." });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "NO_MICROSOFT_IDENTITY")
+        {
+            return BadRequest(new
+            {
+                error = "NO_MICROSOFT_IDENTITY",
+                message = "Sign in with your Microsoft work account first — we connect the directory " +
+                          "you signed in with, so we can be sure it is yours.",
+            });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "TENANT_ALREADY_BOUND")
+        {
+            return Conflict(new
+            {
+                error = "TENANT_ALREADY_BOUND",
+                message = "That Microsoft directory is already connected to another workspace. " +
+                          "Contact support if this is not expected.",
+            });
+        }
+    }
+
+    /// <summary>
+    /// Disconnect the directory. Stops future auto-joins; existing members keep their access.
+    /// </summary>
+    [HttpDelete("{id:guid}/sso/entra")]
+    [ProducesResponseType(typeof(OrgSsoSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> UnbindSso(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await ssoService.UnbindEntraTenantAsync(id, CurrentUserId, ct));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only an owner or admin can change single sign-on." });
+        }
     }
 }

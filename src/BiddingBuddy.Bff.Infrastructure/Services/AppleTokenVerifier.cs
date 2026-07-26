@@ -50,7 +50,12 @@ public class AppleTokenVerifier : IAppleTokenVerifier
 
         var keys = await GetSigningKeysAsync(ct);
 
-        var handler = new JwtSecurityTokenHandler();
+        // Keep the claim names Apple actually sent. By default this handler rewrites inbound claim
+        // types through DefaultInboundClaimTypeMap, which turns `sub` into the
+        // ClaimTypes.NameIdentifier URI and `email` into the ClaimTypes.Email one — so the lookups
+        // below return null and every valid token reads as "has no subject". Same trap as
+        // MicrosoftTokenVerifier; see the note there.
+        var handler = new JwtSecurityTokenHandler { MapInboundClaims = false };
         var parameters = new TokenValidationParameters
         {
             ValidateIssuer = true,

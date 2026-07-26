@@ -10,6 +10,9 @@ public class OAuthAccount
     public string? AccessToken { get; set; }
     public string? RefreshToken { get; set; }
     public DateTime? TokenExpiresAt { get; set; }
+    /// <summary>The Entra directory this identity belongs to (<c>tid</c>). Microsoft only; null for
+    /// every other provider. Doubles as the proof that lets its owner bind an org to that tenant.</summary>
+    public Guid? TenantId { get; set; }
     public string? RawProfile { get; set; }                  // JSON blob
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

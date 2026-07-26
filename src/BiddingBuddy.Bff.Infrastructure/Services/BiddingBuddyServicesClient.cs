@@ -283,12 +283,104 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient, IGrantSer
         return GetJsonAsync<List<TenderResultDto>>(Url("api/tender-results/market/comparables", qs), ct);
     }
 
+    // ── Buyer-side tendering (write path) ────────────────────────────────────
+
+    public Task<TenderTaxonomyDto> GetTenderTaxonomyAsync(CancellationToken ct = default)
+        => GetJsonAsync<TenderTaxonomyDto>("api/tenders/taxonomy", ct);
+
+    public async Task<string> UpsertDirectTenderAsync(
+        DirectTenderUpsertDto tender, CancellationToken ct = default)
+    {
+        // Services answers 201 on create and 200 on update, both with the stored document. We only
+        // need its id — pinned onto the draft so every later corrigendum re-projects to the same
+        // document instead of creating a second one.
+        var stored = await PostJsonAsync<DirectTenderStoredDto>("api/tenders/direct", tender, ct);
+
+        if (string.IsNullOrWhiteSpace(stored.Id))
+            throw new InvalidOperationException(
+                "BiddingBuddyServices accepted the direct tender but returned no id.");
+
+        return stored.Id;
+    }
+
+    /// <summary>Only the field we need back from the stored document.</summary>
+    private sealed record DirectTenderStoredDto(string Id);
+
     private static string Url(string path, IDictionary<string, string?> qs) =>
         qs.Count > 0 ? $"{path}?{QueryString(qs)}" : path;
 
     private static string QueryString(IDictionary<string, string?> qs) =>
         string.Join("&", qs.Where(kv => kv.Value is not null)
             .Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value!)}"));
+
+    /// <summary>
+    /// Shared authenticated POST + deserialize with one-shot 401 token refresh.
+    ///
+    /// <para>The first write path from the BFF to BiddingBuddyServices — everything before
+    /// buyer-side tendering read only, because every tender in the store arrived from the scraping
+    /// pipeline. A department authoring one here is the first tender the BFF has ever originated.</para>
+    ///
+    /// <para>The body is re-serialized for the retry rather than reused: an
+    /// <c>HttpRequestMessage</c> content stream is consumed by the first send, and resending the
+    /// same instance produces an empty body — which upstream would answer with a confusing 400
+    /// instead of the 401 retry actually being attempted.</para>
+    /// </summary>
+    private async Task<T> PostJsonAsync<T>(string url, object payload, CancellationToken ct)
+    {
+        _log.LogDebug("BiddingBuddyServices → POST {Url}", url);
+
+        var json = JsonSerializer.Serialize(payload, _json);
+
+        HttpRequestMessage Build() => new(HttpMethod.Post, url)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            Headers = { Authorization = null },
+        };
+
+        var request = Build();
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.SendAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex,
+                "POST to BiddingBuddyServices at {Base}{Url} failed before a response was read ({ExType}: {ExMessage})",
+                _http.BaseAddress, url, ex.GetType().Name, ex.Message);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"Request to BiddingBuddyServices failed: {ex.Message}",
+                inner: ex);
+        }
+
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            _log.LogWarning("BiddingBuddyServices returned 401 on POST — refreshing token and retrying.");
+            InvalidateToken();
+            request = Build();
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
+            response = await _http.SendAsync(request, ct);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            _log.Log(
+                (int)response.StatusCode >= 500 ? LogLevel.Error : LogLevel.Warning,
+                "BiddingBuddyServices POST {Url} → {Status}: {Body}", url, (int)response.StatusCode, body);
+            throw new UpstreamServiceException(
+                "BiddingBuddyServices",
+                $"BiddingBuddyServices returned {(int)response.StatusCode}: {body}",
+                (int)response.StatusCode);
+        }
+
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<T>(stream, _json, ct)
+            ?? throw new InvalidOperationException("BiddingBuddyServices returned an empty response.");
+    }
 
     /// <summary>
     /// Shared authenticated GET + deserialize with one-shot 401 token refresh.

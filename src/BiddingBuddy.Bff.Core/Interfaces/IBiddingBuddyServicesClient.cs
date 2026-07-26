@@ -69,4 +69,30 @@ public interface IBiddingBuddyServicesClient
     /// <summary>Comparable past awards for a live tender.</summary>
     Task<List<TenderResultDto>> GetComparableAwardsAsync(
         string? category, string? state, decimal? estimatedValue, int limit, CancellationToken ct = default);
+
+    // ── Buyer-side tendering (write path) ────────────────────────────────────
+
+    /// <summary>
+    /// The canonical closed taxonomy — categories and state/UT names — as owned by
+    /// BiddingBuddyServices.
+    /// </summary>
+    /// <remarks>
+    /// Fetched rather than duplicated. Three copies of this list already exist (Services,
+    /// BidProcessor, the UI) and a fourth in the BFF would be a fourth thing to keep in sync — with
+    /// the failure mode that the authoring form offers a category the store then silently rewrites,
+    /// leaving the published tender matching no supplier interests at all.
+    /// </remarks>
+    Task<TenderTaxonomyDto> GetTenderTaxonomyAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Project a buyer-authored tender into the Mongo corpus as <c>source.platform = "direct"</c>.
+    /// Returns the stored document id, which is pinned onto the draft so corrigenda re-project to
+    /// the same document.
+    /// </summary>
+    /// <remarks>
+    /// Hits <c>POST /api/tenders/direct</c>, not the pipeline's <c>POST /api/tenders</c>: the direct
+    /// endpoint REJECTS an off-taxonomy category or state where the pipeline endpoint silently
+    /// rewrites it. See that endpoint's remarks for why the two behaviours must differ.
+    /// </remarks>
+    Task<string> UpsertDirectTenderAsync(DirectTenderUpsertDto tender, CancellationToken ct = default);
 }

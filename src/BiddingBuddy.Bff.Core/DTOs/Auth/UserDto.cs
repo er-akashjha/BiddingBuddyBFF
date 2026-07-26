@@ -21,5 +21,15 @@ public record UserOrgDto(
     string? LogoUrl,
     bool IsActive,
     string? PrimaryCategory,
-    string? GemSellerName = null
+    string? GemSellerName = null,
+
+    /// <summary>
+    /// supplier | buyer | both. Decides which half of the product this org sees — the client hides
+    /// the whole tender-authoring surface for a supplier-only org.
+    ///
+    /// <para>Defaults to <c>supplier</c> so an older client, or an org row predating migration
+    /// 0031, degrades to today's behaviour rather than exposing a department's tooling to every
+    /// supplier.</para>
+    /// </summary>
+    string OrgType = "supplier"
 );

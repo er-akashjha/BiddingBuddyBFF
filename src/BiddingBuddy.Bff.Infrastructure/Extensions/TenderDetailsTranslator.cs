@@ -109,7 +109,12 @@ namespace BiddingBuddy.Bff.Infrastructure.Extensions
                     IsTracked:     false, // not available at this stage
                     IsSaved:       false, // not available at this stage
                     Platform:      item.Source?.Platform,
-                    BidKind:       TenderKind.Resolve(item.Source?.BidKind, gemId)
+                    BidKind:       TenderKind.Resolve(item.Source?.BidKind, gemId),
+                    // Mongo's createdAt, NOT source.scrapedAt: the upsert preserves createdAt
+                    // across re-scrapes, so it answers "when did we first see this" — which is
+                    // what a freshness sort/badge means. scrapedAt moves on every revisit and
+                    // would resurface months-old tenders as new.
+                    CrawledAt:     item.CreatedAt
                 );
 
                 tenderList.Add(dto); // include all tenders regardless of title

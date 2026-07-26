@@ -84,12 +84,20 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IOAuthProviderService, OAuthProviderService>();
         // Singleton so the Apple JWKS cache is shared across requests.
         services.AddSingleton<IAppleTokenVerifier, AppleTokenVerifier>();
+        // Same reasoning for Entra's JWKS — a per-request instance would re-fetch Microsoft's key
+        // set on every single sign-in, turning a 24 h cache into no cache at all.
+        services.AddSingleton<IMicrosoftTokenVerifier, MicrosoftTokenVerifier>();
         services.AddScoped<IAuthService, AuthService>();
 
         // Domain services
         services.AddScoped<IOrganizationService, OrganizationService>();
         services.AddScoped<IJoinRequestService, JoinRequestService>();
+        // Inbound path to buyer status: org requests, operator approves (reuses SetOrgTypeAsync).
+        services.AddScoped<IBuyerRequestService, BuyerRequestService>();
+        services.AddScoped<ISsoService, SsoService>();
         services.AddScoped<ITenderService, TenderService>();
+        // Buyer-side tendering: a department authors a tender here rather than us scraping one.
+        services.AddScoped<IBuyerTenderService, BuyerTenderService>();
         services.AddScoped<ISavedFilterService, SavedFilterService>();
         services.AddScoped<IBidService, BidService>();
         services.AddScoped<IBidAttachmentService, BidAttachmentService>();

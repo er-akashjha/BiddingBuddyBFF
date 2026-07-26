@@ -23,13 +23,19 @@ public interface IAuthService
     /// <summary>Verify the reset code and set the new password; revokes all existing sessions.</summary>
     Task ResetPasswordAsync(ResetPasswordDto dto, CancellationToken ct = default);
     Task<TokenResponseDto> LoginWithPasswordAsync(LoginWithPasswordDto dto, CancellationToken ct = default);
-    Task<TokenResponseDto> HandleOAuthCallbackAsync(string provider, string code, CancellationToken ct = default);
+    /// <param name="expectedNonce">
+    /// The nonce sealed into the signed state at initiation. Providers whose <c>id_token</c> we
+    /// validate (Microsoft) assert it back; the others ignore it.
+    /// </param>
+    Task<TokenResponseDto> HandleOAuthCallbackAsync(
+        string provider, string code, string? expectedNonce = null, CancellationToken ct = default);
     /// <summary>
     /// Mobile OAuth completion: resolve/create the user exactly like the web callback,
     /// but mint a 60-second single-use exchange code (pinning the app's PKCE challenge)
     /// instead of issuing tokens — tokens must never ride a redirect URL.
     /// </summary>
-    Task<MobileOAuthCodeDto> HandleOAuthCallbackForMobileAsync(string provider, string code, string codeChallenge, CancellationToken ct = default);
+    Task<MobileOAuthCodeDto> HandleOAuthCallbackForMobileAsync(
+        string provider, string code, string codeChallenge, string? expectedNonce = null, CancellationToken ct = default);
     /// <summary>Redeem a one-time mobile OAuth code + PKCE verifier for a normal token pair.</summary>
     Task<TokenResponseDto> ExchangeOAuthCodeAsync(string code, string codeVerifier, CancellationToken ct = default);
     Task<TokenResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default);

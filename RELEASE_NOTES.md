@@ -1,6 +1,528 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v34**
+Current version: **v39**
+
+---
+
+## v39 — 2026-07-23 23:23 IST
+
+**A front door to becoming a buyer: an org requests it, an operator approves, approval runs the
+same conversion.** Migration `0033`. Requires ui v33.
+
+v35 made becoming a buyer operator-only (`POST /internal/organizations/{id}/org-type`) — right for a
+department we go out and onboard, but it left a self-serve supplier who wants to publish with no way
+to raise their hand. This adds the request; the **decision is unchanged in spirit**, because a buyer
+publishes notices on the public portal under a department's name and that trust cannot be
+self-asserted.
+
+### The split, and why approval reuses `SetOrgTypeAsync`
+
+- **Org side** (`/api/organizations/buyer-request`, owner/admin, org-scoped): raise, get-current,
+  cancel. Raising records the procuring-entity identity the org is **claiming** plus a mandatory
+  justification — and **grants nothing**. A test pins exactly that: after a request the org is still
+  `supplier`.
+- **Operator side** (`/internal/organizations/buyer-requests`, X-Api-Key): a queue, plus approve and
+  reject.
+
+Approval does not flip the column itself — it calls the **same `SetOrgTypeAsync`** an operator uses
+to provision a department directly, passing the claimed identity straight through. That is deliberate:
+"requested then approved" and "provisioned outright" must not drift into two subtly different notions
+of what a buyer is. One consequence a test locks in — approval writes the identical org-level
+`audit_events` row, carrying the request id in its verification note, so the two paths are
+indistinguishable in the audit trail.
+
+### Shapes worth knowing
+
+- **One pending request per org** — a partial unique index (`WHERE status='pending'`), mirroring
+  `org_join_requests`. Decided rows are history, so a rejected org can reapply once it has more to
+  show; raising twice returns the existing pending row rather than stacking work in the queue.
+- **The submitted notification goes to an operator, not a user.** There is no operator user in this
+  system, so it emails a configured `BuyerRequests:NotifyEmail` with `UserId=null`. Unconfigured →
+  logged and skipped; the `/internal` queue is still the source of truth. Approve/reject notify the
+  org's owner/admins (the stable audience, not the possibly-departed requester).
+- **A justification is mandatory to request, a reason is mandatory to reject.** An approval is a
+  judgement and needs something to judge; a rejection the org can act on needs to say why.
+
+### Validated, not just reviewed
+
+`0033` executed against a throwaway Postgres 16 (the process that caught v35's `org_members` bug):
+full chain `0001`–`0033` clean, idempotent over three passes, and the constraints verified rejecting
+— a second pending row for one org, a bogus status, an out-of-range `entity_type` (kept in step with
+`organizations`), and a null justification. Container torn down after.
+
+### Tests
+
+**410 passing** (393 before, 17 new). The request lifecycle end to end, the raise-grants-nothing
+property, role-gating (a viewer cannot request), approval flipping the org **and** writing the shared
+audit event, `both` for a PSU that also bids, reject-requires-a-reason leaving the org a supplier,
+and a rejected org reapplying.
+
+### Not built
+
+An in-app operator console. There is no platform-admin app in this system — every operator action
+is an X-Api-Key `/internal` call — so approving a request is a `curl` (or a script) against the queue
+and decision endpoints. A console is a separate build with its own auth story; approval works today
+without it.
+
+### Deploy
+
+Apply `0033` after `0031`/`0032`. Optionally set `BuyerRequests:NotifyEmail` so requests page an
+operator instead of only sitting in the queue.
+
+---
+
+## v38 — 2026-07-23 09:41 IST
+
+**Enterprise SSO: Microsoft Entra ID as a provider, organizations bound to a directory, and an
+email-first login box that routes a domain to the right IdP.** Migration `0032`. Requires ui v32.
+
+### The invariant
+
+> Membership is granted by the `tid` claim of a signature-verified Entra `id_token`. **Never by an
+> email domain.**
+
+Domain routing exists only to decide *which sign-in button to press for you*. It grants nothing. If
+routing sends the wrong person to Microsoft, Microsoft states who they actually are, their `tid` does
+not match, and they auto-join nothing. Every piece below holds that line, and
+`NonMatchingTenant_JoinsNothing` is the test that would catch it moving.
+
+What makes routing safe without a DNS-verification flow of our own: Entra refuses to attach a custom
+domain to a directory until someone proves ownership with a DNS TXT record. **Microsoft has already
+done the verification.** So `org_sso_domains` rows are written by the server from tenant-matched
+sign-ins — never typed in by a customer.
+
+### The provider
+
+`MicrosoftTokenVerifier` reads identity from the `id_token` rather than calling Graph `/me` — it is
+signature-verified, carries `tid` (which `/me` will not give up without extra permissions), and costs
+no second hop. Three Entra-specific traps, each with a test:
+
+- **The issuer is per-tenant** (`https://login.microsoftonline.com/{tid}/v2.0`), so there is no single
+  string for `ValidIssuer`. The tempting shortcut — `ValidateIssuer = false` — accepts tokens from any
+  issuer whose key is in the set. Instead the issuer is validated *against the token's own `tid`*.
+- **Personal accounts** sign in under one well-known tenant GUID, rejected explicitly so "work
+  accounts only" does not rest solely on the `/organizations` authority being configured right.
+- **The nonce** is generated once in `InitiateOAuth`, sealed into the signed state *and* sent to
+  Microsoft, then asserted on return — so an `id_token` minted for another sign-in cannot be replayed.
+
+`oauth_accounts.provider` was already free-text with `UNIQUE(provider, provider_user_id)`, so the
+provider itself needed no schema change. `ProviderUserId` is `oid`, not `sub`: `sub` is pairwise per
+(app, user) and means nothing to an admin trying to identify an account in a support conversation.
+
+**Entra omits the `email` claim entirely** in tenants that never set the user's mail attribute, which
+is common. Falls back `email` → `preferred_username` → `upn`, taking the first that actually parses as
+an address — a UPN is usually an email but is not required to be one. `MS_NO_EMAIL` when none does.
+The real fix is adding `email` as an optional ID claim in the app registration; see below.
+
+### Behaviour change: linking now requires a verified email
+
+`LinkOrCreateUserAsync` used to adopt any pre-existing account matching the provider's email. That is
+a privilege transfer, so it now requires the provider to actually vouch for the address. Creating a
+*new* account on an unverified email is untouched — only adoption is gated.
+
+| Provider | `EmailVerified` |
+|---|---|
+| Microsoft | `true` — the `/organizations` authority already excluded consumer accounts |
+| Google | the `verified_email` field it has always sent and we ignored |
+| GitHub | only for addresses on `/user/emails`, the one surface that states verification |
+| Facebook | `false` — Graph asserts nothing |
+| Apple | `AppleIdentity.EmailVerified`, which v37 made real |
+
+⚠️ **This can block a login that worked yesterday**: a Facebook account whose email collides with an
+existing Google account is now refused with `EMAIL_LINK_UNVERIFIED` instead of silently merging. That
+is the security win and the most likely support call. ui v32 renders real copy for the code, pointing
+the user at their original provider plus Settings.
+
+### Binding is by proof, not by typing a GUID
+
+`POST /api/organizations/{id}/sso/entra` **ignores any tenant id in the request body** and reads the
+caller's own `oauth_accounts.tenant_id`. You can bind the directory you personally authenticated
+against and no other. A tenant id is not a secret — it is discoverable for any company with a public
+Entra presence — so a form that accepted one would be a way to claim a competitor's directory and
+collect their staff on next sign-in. Owner/admin is necessary but *not sufficient*; the proof is the
+control.
+
+Auto-join grants `organizations.sso_default_role`, defaulting to `viewer` — an auto-join is the one
+membership no human approved. An unrecognised role falls back to viewer rather than being written
+through to a CHECK-constraint 500. Owners and admins get `SSO_MEMBER_JOINED` after the fact, because
+otherwise the first sign that SSO is live is a stranger in the member list.
+
+### Migration `0032`
+
+`organizations.entra_tenant_id` + `sso_default_role`, `oauth_accounts.tenant_id`, `org_sso_domains`,
+and the `SSO_MEMBER_JOINED` templates.
+
+The unique index on `entra_tenant_id` **is** enforced, unlike `0030`'s GSTIN index which deliberately
+only reported duplicates. That restraint was right there because the column predated the check, so the
+databases most needing the constraint were the ones `CREATE UNIQUE INDEX` would abort on.
+`entra_tenant_id` is new in this script — no row can already violate it.
+
+### Endpoints
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/auth/sso/lookup?email=` | Anonymous. Returns `{provider}` and **nothing else** — an org name here would make it a directory of our customers, queryable by any domain a caller guesses. Always 200, so a routine miss never reaches the SPA's error rail. |
+| `GET/POST/DELETE /api/organizations/{id}/sso[/entra]` | Read, bind-by-proof, disconnect. Disconnect stops future auto-joins; existing members keep access. |
+| `GET /api/auth/oauth/microsoft?login_hint=` | `login_hint` pre-selects the account in Microsoft's picker. Cosmetic — never read back as identity. |
+
+### Setup (blocks local testing)
+
+Entra admin center → App registrations → New registration → **multitenant**; Web redirect URI
+`…/api/auth/oauth/microsoft/callback` per environment; a client secret (note its expiry); delegated
+`openid email profile offline_access`, all user-consentable so no tenant admin consent is needed; and
+**Token configuration → add `email` as an optional ID claim**. Secret goes in user-secrets/env, never
+`appsettings.json`.
+
+### Notes
+
+- `SsoService.UnbindEntraTenantAsync` uses `RemoveRange`, not `ExecuteDelete` — the latter cannot be
+  translated by the in-memory provider the tests run on, and an untestable unbind is not worth one
+  saved round-trip.
+- 381 tests green. The in-memory provider enforces no unique indexes, so the
+  `uq_organizations_entra_tenant` collision path is covered by an explicit service check rather than
+  by trusting the database to say no — and still needs a real-Postgres pass before go-live.
+- Not yet exercised against a live Entra tenant. Everything above is unit-tested and builds clean;
+  the end-to-end flow is unverified.
+
+---
+
+## v37 — 2026-07-23 09:38 IST
+
+**Native Apple sign-in was broken for every user, on every attempt.** One line in
+`AppleTokenVerifier`. No migration. No client change.
+
+### The bug
+
+`JwtSecurityTokenHandler` rewrites inbound claim types through `DefaultInboundClaimTypeMap` unless
+told not to. The verifier read `principal.FindFirst("sub")`, but by that point `sub` had been renamed
+to `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier` — so the lookup returned
+null and a signature-valid, audience-correct, unexpired Apple token was rejected with
+`"Apple token has no subject"`. `POST /api/auth/apple` could never have succeeded. `email` was mapped
+to the `ClaimTypes.Email` URI the same way and would have come back null even on the first
+authorization, which is the only time Apple sends it at all.
+
+The fix is `new JwtSecurityTokenHandler { MapInboundClaims = false }`, exactly what
+`MicrosoftTokenVerifier` already does and for exactly the same reason. Nothing else in `src/` sets
+`DefaultMapInboundClaims`, so nothing was compensating globally.
+
+Worth naming the shape of this one: it fails on the **happy path only**. Every negative test — bad
+audience, wrong issuer, expired, foreign signing key — passed before the fix, because those tokens
+are rejected earlier and never reach the claim lookup. A test suite built around rejection cases
+stays green while the feature is 100% broken. That is why `AppleTokenVerifierTests` leads with
+`Verify_AcceptsAWellFormedToken`.
+
+### Blast radius: `email_verified` starts telling the truth
+
+`AuthService.SignInWithAppleAsync` passes `identity.EmailVerified` into
+`LinkOrCreateUserAsync`, which refuses to attach a provider identity to a **pre-existing** user
+unless the provider vouches for the address (`EMAIL_LINK_UNVERIFIED`). That value has been
+unconditionally false, so no Apple sign-in could ever adopt an existing account.
+
+It now carries Apple's real assertion. **Apple users can start linking to existing accounts once this
+deploys** — the intended behaviour, and the reason the gate was written, but it is a live change in
+who can reach which account, not a no-op. New-account creation on an unverified address is
+unaffected; only adoption of an existing one is gated.
+
+`email_verified` itself needed no change, and that was verified rather than assumed. Apple documents
+it as "a string or Boolean value" and emits both across its native and web flows; the handler
+normalises a JSON boolean to the lowercase string `"true"`, so the existing `is "true" or "1"` test
+already covers both encodings. `AppleTokenVerifierTests` pins both so a future rewrite of that check
+can't quietly drop one.
+
+### Tests
+
+`tests/BiddingBuddy.Bff.Tests/Auth/AppleTokenVerifierTests.cs` — 15 cases on the
+`MicrosoftTokenVerifierTests` fixture (mocked JWKS via `IHttpClientFactory`, tokens signed with a
+local `RsaSecurityKey`). 8 of them failed against the unfixed verifier, all with
+`"Apple token has no subject"`. Covers the claim names, both `email_verified` encodings, absent
+`email` on a returning sign-in, the web Services ID audience, and the rejection paths. Suite: 381/381.
+
+---
+
+## v36 — 2026-07-23 08:57 IST
+
+**Two small read-side additions so the Tenders page can sort by crawl freshness and filter by
+source portal.** No migration. Requires Services v15 and ui v31.
+
+### `TenderListItemDto.CrawledAt`
+
+The list DTO carried no timestamp for when we first saw a tender, so the UI could neither order by
+freshness nor mark anything as new. It now carries the Mongo `createdAt` that `TenderSearchItemDto`
+was already returning and the translator was already throwing away.
+
+`createdAt`, explicitly, and not `updatedAt` or `source.scrapedAt`. The upsert preserves `createdAt`
+across re-scrapes, so it means "new to us"; the other two move on every revisit and would resurface
+months-old tenders as new the morning after a re-scrape. `TenderListCrawledAtTests` pins that
+distinction — it asserts the mapped value equals the first-seen instant and specifically **not** the
+last-updated one, so a future "simplification" to `UpdatedAt` fails rather than quietly changing
+what the page means.
+
+Null on the Postgres-backed list path (`TenderService`), which has no equivalent column. The UI
+treats null as "no freshness information" and simply omits the badge and the timestamp, so that
+path degrades to exactly its current appearance rather than to a wrong date.
+
+### `SavedFilterState.Platforms`
+
+A saved view that dropped its portal selection would silently reapply as a broader search than the
+one the user named, so the portal filter is persisted alongside categories and states.
+
+**No migration needed.** `filters` is a single `jsonb` column serialized whole by
+`UserSavedFilterConfiguration`'s STJ value converter, so adding a property extends the blob's shape
+in place. Rows written before this deserialize with `Platforms` null, which is the same as no
+portal filter — a view saved last week reapplies unchanged.
+
+### The portal filter itself needed nothing
+
+Worth recording, because the obvious assumption is that a new filter means a new parameter at every
+hop. `TenderSearchQueryDto.Platforms` and its repeated-param forwarding in
+`BiddingBuddyServicesClient.BuildSearchUrl` have been in place since the multi-select facets landed;
+only the UI had never sent the parameter. Same for `sortBy` / `sortOrder`, which pass straight
+through. The whole of both features on the BFF side is the two additions above.
+
+---
+
+## v35 — 2026-07-23 08:48 IST
+
+**Buyer-side tendering, Phase 1: a government department authors a tender notice here and publishes
+it.** Migration `0031`. Requires Services v14 and ui v30.
+
+Everything below is e-publishing only — we host and distribute the **notice**, and bids are still
+received wherever the department receives them today. No bid ever touches this system, which is what
+keeps the entire surface outside STQC certification, PKI and HSM key custody. That boundary is the
+design, not a shortcut; see `docs/gov-tendering/PLAN.md` §3 for why Phase 3 is 12–18 months and this
+is weeks.
+
+### The first authorization enforcement point in this API
+
+There was none. `OrgContextMiddleware` checks membership and **never reads the role**, and the only
+real role check in the codebase was `RequireRoleAsync`, private to `OrganizationService`. Every
+member of an org could do anything the org could do.
+
+That cannot carry buyer-side tendering, because the GePNIC separation of duties — the officer who
+drafts a tender is not the officer who publishes it — is the control that makes a department's file
+auditable. An unenforced separation is *worse* than none: the audit file records it as though it
+held.
+
+- `Core/Authorization/OrgRoles.cs` — the role vocabulary plus a **capability map**. Endpoints name
+  capabilities (`tender.author`, `tender.publish`, `tender.read`, `committee.manage`), never roles,
+  so adding a role later is one edit to the map rather than a sweep over every controller.
+- `Api/Filters/RequireOrgCapabilityAttribute.cs` — an `IAsyncAuthorizationFilter`. A method-level
+  attribute overrides a controller-level one; without that, decorating a controller `tender.read`
+  and an action `tender.publish` would enforce both and the stricter would silently win.
+- Five buyer roles on `org_members`: `po_admin`, `po_publisher`, `po_opener`,
+  `po_evaluator`, `auditor`. Only the first two and `auditor` do anything in Phase 1 — there is no
+  bid to open until Phase 3 — but all five are defined now so committee membership recorded today
+  still means something then, and so the CHECK on that table never has to be widened twice.
+
+**The 403 from this filter is distinguishable from the membership 403.** It carries
+`code: "FORBIDDEN_ROLE"` plus the missing capability and the role actually held. Those two 403s have
+been indistinguishable to clients, so the SPA could not tell "you were removed from this org" from
+"you lack the role" and had to re-fetch `/api/auth/me` to guess.
+
+**Scope: applied to buyer routes only.** Every pre-existing endpoint keeps membership-only
+behaviour, so nothing that works today starts 403-ing. Retrofitting the rest of the API is a real
+gap and a separate, reviewable change.
+
+### `organizations.org_type`, and why `both` exists
+
+`supplier` (the default, describing every org that existed before this migration), `buyer`, or
+`both`. A PSU genuinely is both — it publishes tenders for its own procurement and bids for
+contracts elsewhere — and making it keep two workspaces would split its document vault and its team
+for no reason.
+
+**It is on `UserOrgDto`**, so `/api/auth/me` carries it and the client can hide the whole authoring
+surface for a supplier-only org. That was very nearly missed: the column, the CHECK and the entity
+property all existed while the DTO projected eight fields without it, which would have shipped a
+feature whose navigation rendered for **nobody** — and looked like a UI bug rather than a missing
+projection. It defaults to `supplier` on the record, so an older client or an org row predating
+`0031` degrades to today's behaviour rather than exposing a department's tooling to every supplier.
+
+The client gate is cosmetic, not a control: the routes themselves are unguarded, so a supplier-org
+user who types `/buyer/tenders` reaches the page and every call comes back `403 FORBIDDEN_ROLE`.
+The server is authoritative, which is the right split — but it does mean the nav check is there to
+avoid showing people features they cannot use, not to keep them out.
+
+### Becoming a buyer is provisioned, not self-served
+
+`POST /internal/organizations/{orgId}/org-type` (X-Api-Key) is the **only** way to set `org_type`.
+`CreateOrgDto` and `UpdateOrgDto` deliberately do not carry it.
+
+A buyer org publishes notices that appear on the public portal under a department's name. A
+self-serve checkbox would make "Directorate of Health Services, Kerala" claimable by anyone with an
+email address, and this platform would carry the result — which is precisely the artefact a supplier
+is supposed to be able to trust. It also matches how the first buyers are reached anyway: the
+beachhead is ULBs, universities and state PSUs, sold to rather than signed up.
+
+The endpoint takes the procuring-entity identity (`entityType`, `ministry`, `department`, `office`,
+`procuringEntityCode`) and a free-text `verificationNote`, and writes an `audit_events` row against
+the **organization** — so "who made this a buyer, and on what evidence" has a durable answer before
+any tender exists. `actorId` is null and the actor is recorded as `operator (internal API key)`,
+because attributing it to a user id would name whoever happened to hold the key.
+
+Values are validated in the service rather than left to the CHECK: a constraint violation surfaces
+as a 500 with a constraint name in it, and an operator provisioning a department deserves to be told
+which value was wrong and what the alternatives are. Omitted identity fields are left alone, so a
+later call correcting only the type cannot wipe what was recorded earlier.
+
+Granting the type is enough to start authoring — the org **owner** already holds every buyer
+capability. Splitting `po_admin` from `po_publisher` is then a Team-page action.
+
+### Postgres owns the audit truth; Mongo owns the view
+
+`tender_drafts` is the authoring document and the aggregate root. Ownership hangs off the draft
+because **tenders in this system are global** — verified, no `org_id` on the Mongo model or the
+Postgres entity — and a department's own notice is the first tender that has an owner, from the
+moment the form is opened.
+
+On publish it projects into Mongo as `source.platform = "direct"`, which puts it on the public
+portal, `/explore`, the SEO hub pages and the supplier matching rail **with no new read-side code
+anywhere**. That reuse is the single biggest reason this phase is small.
+
+That projection is an upsert and is *supposed* to be mutable — a corrigendum must change what
+suppliers see. The immutability requirement lives in `tender_versions` instead:
+
+- `ContentHash = sha256(canonical_json(snapshot))`, `ChainHash = sha256(prev || content)`, genesis
+  from the empty string. Altering any historical row breaks every chain hash after it.
+- Canonicalisation sorts object keys recursively and strips whitespace, so a document differing only
+  in key order hashes identically — a false tampering alarm in an audit tool is worse than no tool.
+  **Array order is preserved**: line items 1,2,3 are not the same bill of quantities as 3,2,1.
+- Verification recomputes from the snapshot rather than trusting the stored content hash, so
+  rewriting a row's content *and* its hash together is still caught.
+- **Tamper-evident, not tamper-proof** — whoever can write these rows can rebuild the chain. Closing
+  that needs RFC 3161 timestamping from a licensed CA, which is Phase 3. The audit file states this
+  verbatim in its `method` field rather than leaving a reader to infer the guarantee.
+
+### The compliance engine is the wedge
+
+`Core/Compliance/TenderComplianceRules.cs`. Departments fear a CAG paragraph more than they want
+speed, so the rules are encoded as blocking validations and **every finding carries the citation of
+the instrument behind it** — MSE Order 2012, PPP-MII, GFR 144(xi) land-border, Integrity Pact, GFR
+149/159/160, CVC notice periods. An auditor wants the authority, not our opinion.
+
+Severity is the design, and two calls are worth stating:
+
+- **An off-taxonomy category is an ERROR, not a warning.** Services rewrites it silently and alert
+  matching is exact, so a free-text category publishes a tender that matches nobody, forever, with
+  nothing reporting it. This validation is the only place in the entire chain where that is visible.
+  The authoring form is constrained to canonical values fetched from Services, and the `direct`
+  endpoint rejects independently — three layers, because the failure is silent at every one.
+- **Self-publication warns, never blocks.** A one-officer ULB must still be able to publish. The
+  control is made visible and recorded rather than made impossible.
+
+The rule set is **versioned** (`2026.07.1`) and pinned onto every published version, so a two-year-old
+tender is re-evaluated under the rules it was published beneath. An engine that silently applies
+today's thresholds to an old tender gives a confidently wrong audit answer, which is worse than none.
+
+### Corrigenda reach the people who were told
+
+Amendments append a corrigendum with a field-level diff plus a new version, re-project, and notify
+**the suppliers our own matching rail already alerted** — the orgs holding a `tender_matches` row,
+not everyone matching the interest rules today. A supplier never told about the tender does not need
+to hear its deadline moved. `notified_at` stays null if that fails, which the UI surfaces: an
+extension nobody was told about is not an extension.
+
+Publication also mirrors the tender into the Postgres `tenders` table via the pipeline's own
+`UpsertTenderAsync`. That is not incidental — `TenderMatchScanWorker` scans **Postgres**, so a
+Mongo-only projection would be publicly visible and would alert nobody. Reusing the pipeline path
+rather than writing the row here also keeps its existing amendment detection, which notifies orgs
+with a live bid when a closing date moves.
+
+### Endpoints — `/api/buyer/tenders`
+
+`GET /options` · `GET /` · `GET /{id}` · `POST /` · `PATCH /{id}` · `DELETE /{id}` ·
+`GET /{id}/validate` · `POST /{id}/publish` · `POST /{id}/corrigenda` · `POST /{id}/award` ·
+`POST /{id}/cancel` · `PUT /{id}/committee` · `GET /{id}/audit-file`
+
+A compliance refusal is **422**, not 400: the request was well-formed and understood, the tender is
+simply not yet publishable. Handled at the controller rather than `GlobalExceptionHandler`, which
+would render bare ProblemDetails and drop the findings — and the findings, with their citations, are
+the entire response the authoring form needs.
+
+`GET /options` serves **every** constrained vocabulary, including the three that only exist as CHECK
+constraints in `0031` — corrigendum types, committee kinds, MII class restrictions. Those were
+initially left for the client to hardcode from the migration, which is a drift that fails silently
+in the worst place: the form keeps offering a value the database has stopped accepting, and the
+officer meets a 500 with a constraint name in it at the moment they hit publish.
+
+### Landmines handled
+
+- **Reference codes are URL-safe by construction.** `TA-2026-000123` from a Postgres sequence; the
+  department's own file number (`F.No.12-3/2026-Admin`) is an ordinary display field. Slashes in an
+  identifier are already why the enrichment-status endpoint takes its id in a body rather than a
+  route — this one never needs escaping anywhere. A sequence rather than `MAX()+1` because two
+  officers clicking "New tender" in the same second would otherwise race into a 500 on an empty form.
+- **`org_members` predates DbMigrator**, so its role CHECK has whatever name Postgres
+  generated in a given environment. Dropped by `pg_constraint` **lookup**, never by name — same
+  pattern `0029` needed for `emd_payments`.
+- **The members table is `org_members`, not `organization_members`.** This migration was written
+  against the latter and would have failed on the very first run with
+  `relation "organization_members" does not exist`. Caught by executing it against a throwaway
+  Postgres rather than by reading it — see below.
+- **Entities linked by navigation, not scalar FK.** Assigning `DraftId = draft.Id` before
+  `SaveChanges` hands EF a zero-GUID it cannot order INSERTs from — the bug that broke every
+  workspace creation once already.
+- **Buyer uploads go to R2**, not the AWS tender bucket. The tender presign endpoint resolves its S3
+  client by the fixed `"TenderS3"` key, so a document stored in R2 cannot be presigned through that
+  path; buyer attachments use the existing org-document presign route, which already points at R2.
+- **No hard delete of anything published.** Only a `draft` can be deleted; a published tender is
+  cancelled, and the cancellation is itself a corrigendum because bidders must be told.
+
+### Tests
+
+**69 new** across three suites. `SetOrgTypeTests` pins the provisioning guard: promotion, revocation,
+re-affirmation recorded distinctly, invalid type/entity rejected with a usable message, nothing
+written when validation fails, and omitted identity fields left intact. Hash chain: canonicalisation both directions, and four
+tamper scenarios including the competent one (content and its hash rewritten together) and deletion
+from the middle. Compliance: severities pinned per rule, since the error/warning boundary is what
+decides between stranding a department and waving through the mistake that matters. Capabilities:
+the separation of duties, plus a test that every declared role appears in the map — a role added to
+`OrgRoles` and the SQL CHECK but not the map fails closed, which looks like a permissions bug rather
+than a missing registration.
+
+### `0031` was executed, not just reviewed — and it was broken
+
+Run against a throwaway Postgres 16 seeded from `database/schema.sql` (truncated to its pre-`0031`
+state) plus every migration in filename order. It **failed on the first statement that touched the
+members table**: the script said `organization_members`; the table is `org_members`.
+
+The wrong name did not come from nowhere. **`CLAUDE.md` said `organization_members` in three
+places** — including the sentence describing what `OrgContextMiddleware` checks — while
+`OrgMemberConfiguration.cs:11` has always said `b.ToTable("org_members")`. The migration was written
+from the documentation and the documentation was wrong. All three references are corrected, along
+with the two in these notes and one in `schema.sql`.
+
+It is worth being precise about how this would have surfaced. Nothing catches it earlier: the C#
+compiles (EF has the right name), all 323 tests pass (they never touch this table's DDL), and a
+review reads fine because the wrong name is plausible and self-consistent. It fails at
+`POST /internal/migrations`, in whichever environment ran it first, and **because DbMigrator applies
+scripts in one transaction and records nothing on failure, it would have blocked every later
+migration until someone fixed it.**
+
+Verified after the fix, from a clean database:
+
+| Check | Result |
+|---|---|
+| All migrations `0001`–`0032` in filename order | pass, 42 → 55 tables |
+| Whole set re-run twice (idempotency) | pass — no duplicate constraints, no duplicate templates |
+| Six buyer tables, `org_type` + 5 identity columns, `tender_reference_seq` | present, sequence increments |
+| `po_publisher` accepted / `bid_manager` still accepted / `procurement_wizard` rejected | as designed |
+| `org_type`, `entity_type`, draft `status`, version `reason` CHECKs reject junk | all reject |
+| `uq_tender_versions_draft_version`, `uq_corrigenda_draft_no`, `uq_tender_drafts_reference_code` | all reject duplicates |
+| Deferred FK `tender_ownership → tender_drafts` rejects an orphan | rejects |
+| `updated_at` trigger advances on UPDATE | fires |
+| 4 notification template rows seeded, none duplicated on re-run | correct |
+| **Deleting a draft leaves its `audit_events` intact** while versions/corrigenda cascade | **audit trail survives — the design property this table exists for** |
+
+### Deploy
+
+Apply `0031` **before** deploying. Note `database/schema.sql` is a hand-maintained human reference
+and had **already** drifted from the migrations by four tables (`grant_opportunities`,
+`emd_deposits`, `tender_matches`, `user_saved_filters`) before this change; the buyer tables are
+added to it, but that pre-existing drift is not fixed here.
+
+Not built, deliberately: AI-assisted NIT/BOQ drafting, the CPPP XML exporter (the spec has not been
+obtained — writing it against an assumed shape would be guesswork), the GeMARPTS generator, and the
+newspaper-advertisement text generator. All additive on top of this.
 
 ---
 

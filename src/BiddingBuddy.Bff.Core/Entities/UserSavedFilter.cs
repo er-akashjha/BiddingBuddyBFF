@@ -46,6 +46,14 @@ public class SavedFilterState
     public string? Q { get; set; }
     public string[]? Categories { get; set; }
     public string[]? States { get; set; }
+
+    /// <summary>
+    /// Source-portal slugs ("gem", "eprocure", "coalindiatenders", …). Added after the
+    /// column shipped — safe without a migration because the whole state is one jsonb
+    /// blob, and absent on rows saved before this, which deserialize to null = no filter.
+    /// </summary>
+    public string[]? Platforms { get; set; }
+
     public string? Status { get; set; }
     public decimal? MinValue { get; set; }
     public decimal? MaxValue { get; set; }

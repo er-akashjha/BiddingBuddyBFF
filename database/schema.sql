@@ -46,6 +46,7 @@ CREATE TABLE oauth_accounts (
   access_token      TEXT,
   refresh_token     TEXT,
   token_expires_at  TIMESTAMPTZ,
+  tenant_id         UUID,                     -- Entra `tid`; migration 0032. Microsoft only.
   raw_profile       JSONB,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -136,12 +137,18 @@ CREATE TABLE organizations (
   gem_seller_name      TEXT,                       -- migration 0024
   primary_category     TEXT,
   logo_url             TEXT,
+  entra_tenant_id      UUID,                         -- migration 0032
+  sso_default_role     TEXT NOT NULL DEFAULT 'viewer',
   is_active            BOOLEAN NOT NULL DEFAULT true,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_organizations_owned_by ON organizations (owned_by);
+
+-- One Entra directory feeds at most one workspace; auto-join would otherwise be ambiguous.
+CREATE UNIQUE INDEX uq_organizations_entra_tenant
+  ON organizations (entra_tenant_id) WHERE entra_tenant_id IS NOT NULL;
 
 CREATE TRIGGER trg_organizations_updated_at
   BEFORE UPDATE ON organizations
@@ -186,6 +193,23 @@ CREATE UNIQUE INDEX uq_join_requests_one_pending_per_user_per_org
   ON org_join_requests (org_id, user_id) WHERE status = 'pending';
 CREATE INDEX ix_join_requests_org_status ON org_join_requests (org_id, status, created_at DESC);
 CREATE INDEX ix_join_requests_user       ON org_join_requests (user_id, created_at DESC);
+
+-- Email domains routed to an org's identity provider. Migration 0032.
+--
+-- ROUTING ONLY — this table grants nothing. It answers "which sign-in button for this address";
+-- membership comes from the `tid` claim of a verified Entra id_token. Rows are written by the
+-- server when a tenant-matched user signs in, never typed by a customer, which is why no
+-- DNS-verification flow is needed: Entra already made the tenant prove the domain by DNS TXT.
+CREATE TABLE org_sso_domains (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  domain      TEXT NOT NULL,
+  source      TEXT NOT NULL DEFAULT 'entra' CHECK (source IN ('entra','manual')),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_org_sso_domains_domain ON org_sso_domains (lower(domain));
+CREATE INDEX ix_org_sso_domains_org           ON org_sso_domains (org_id, created_at DESC);
 
 -- Duplicate-signup probe indexes (migration 0030). The GSTIN expression must stay
 -- byte-identical to what OrganizationService emits, or the probe silently seq-scans.
@@ -937,3 +961,220 @@ CREATE TABLE user_devices (
 
 CREATE INDEX idx_user_devices_active ON user_devices (user_id, last_seen_at DESC)
   WHERE revoked_at IS NULL AND push_enabled = true;
+
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Buyer-side tendering (migration 0031)
+--
+-- A government department AUTHORS a tender notice here rather than us scraping
+-- one. Phase 1 = e-publishing only: no bid ever touches this system, which is
+-- what keeps the surface outside STQC certification. See
+-- docs/gov-tendering/PLAN.md.
+--
+-- Postgres owns the AUDIT TRUTH (drafts, hash-chained versions, corrigenda,
+-- audit events). The published projection lives in Mongo like every other
+-- tender, and is mutable on purpose -- a corrigendum must change what suppliers
+-- see. Immutability lives in tender_versions.
+--
+-- NOTE: this file is a hand-maintained human reference; the runtime applies
+-- Persistence/Migrations/*.sql. It had already drifted from those by four
+-- tables (grant_opportunities, emd_deposits, tender_matches, user_saved_filters)
+-- before 0031 -- that drift is NOT fixed here.
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+-- 0031 also adds to organizations:
+--   org_type TEXT NOT NULL DEFAULT 'supplier' CHECK (IN 'supplier','buyer','both')
+--   entity_type, ministry, department, office, procuring_entity_code  (buyers only)
+-- and widens org_members.role to add the five buyer roles:
+--   po_admin, po_publisher, po_opener, po_evaluator, auditor
+-- (dropped by pg_constraint LOOKUP, never by name -- that table predates DbMigrator).
+
+CREATE SEQUENCE tender_reference_seq START 1;
+
+CREATE TABLE tender_drafts (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id                UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  -- OUR generated, URL-safe code (TA-2026-000123). The department's own file
+  -- number goes in department_reference -- it contains slashes and is never an id.
+  reference_code        TEXT NOT NULL,
+  department_reference  TEXT,
+  status                TEXT NOT NULL DEFAULT 'draft'
+                          CHECK (status IN ('draft','published','awarded','cancelled')),
+  title                 TEXT NOT NULL DEFAULT '',
+  description           TEXT NOT NULL DEFAULT '',
+  scope_of_work         TEXT NOT NULL DEFAULT '',
+  tender_type           TEXT, procurement_category TEXT, form_of_contract TEXT,
+  bidding_system        TEXT, evaluation_method TEXT, technical_weightage NUMERIC(5,2),
+  gfr_rule_cited        TEXT,
+  -- MUST be canonical: Services rewrites off-taxonomy values silently and alert
+  -- matching is EXACT, so a free-text category matches nobody, forever.
+  category              TEXT, state TEXT, city TEXT, pincode TEXT,
+  estimated_value       NUMERIC(18,2), value_disclosed BOOLEAN NOT NULL DEFAULT TRUE,
+  emd_amount            NUMERIC(18,2), emd_percentage NUMERIC(5,2), emd_mode TEXT,
+  emd_exemptions        TEXT[] NOT NULL DEFAULT '{}',
+  tender_fee            NUMERIC(18,2), tender_fee_exemptions TEXT[] NOT NULL DEFAULT '{}',
+  performance_security_pct NUMERIC(5,2), bid_validity_days INT,
+  published_at          TIMESTAMPTZ,
+  doc_download_start    TIMESTAMPTZ, doc_download_end TIMESTAMPTZ,
+  clarification_start   TIMESTAMPTZ, clarification_end TIMESTAMPTZ,
+  prebid_meeting_at     TIMESTAMPTZ, prebid_venue TEXT,
+  bid_submission_start  TIMESTAMPTZ, bid_submission_end TIMESTAMPTZ,
+  technical_opening_at  TIMESTAMPTZ, financial_opening_at TIMESTAMPTZ,
+  mse_reservation_pct   NUMERIC(5,2),
+  mii_applicable        BOOLEAN NOT NULL DEFAULT FALSE,
+  mii_local_content_pct NUMERIC(5,2), mii_class_restriction TEXT,
+  lbs_declaration_required BOOLEAN NOT NULL DEFAULT FALSE,
+  startup_relaxation    BOOLEAN NOT NULL DEFAULT FALSE,
+  integrity_pact_applicable BOOLEAN NOT NULL DEFAULT FALSE,
+  integrity_pact_monitor TEXT, gemarpts_reference TEXT,
+  -- The long tail of the field inventory: covers, BOQ, tech specs, eligibility,
+  -- attachments, contact. Written/read whole, never searched.
+  detail                JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Compliance rule set pinned at publish, so an old tender is re-evaluated
+  -- under the rules it was published beneath.
+  rule_set_version      TEXT,
+  mongo_tender_id       TEXT,
+  current_version       INT NOT NULL DEFAULT 0,
+  created_by            UUID NOT NULL REFERENCES users(id),
+  published_by          UUID REFERENCES users(id),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_tender_drafts_reference_code ON tender_drafts (reference_code);
+CREATE INDEX ix_tender_drafts_org_status ON tender_drafts (org_id, status, updated_at DESC);
+
+-- "This org owns/may work on this draft." Net-new: tenders are global and carry
+-- no org_id anywhere, because every one until now was scraped and belonged to nobody.
+CREATE TABLE tender_ownership (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id       UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  draft_id     UUID NOT NULL REFERENCES tender_drafts(id) ON DELETE CASCADE,
+  relationship TEXT NOT NULL DEFAULT 'owner' CHECK (relationship IN ('owner','delegate')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_tender_ownership_org_draft ON tender_ownership (org_id, draft_id);
+
+-- Immutable, hash-chained. NEVER updated, never deleted.
+--   content_hash = sha256(canonical_json(snapshot))
+--   chain_hash   = sha256(prev_chain_hash || content_hash)   -- genesis prev = ''
+-- Tamper-EVIDENT by replay, not tamper-proof: whoever can write these rows can
+-- rebuild the chain. RFC 3161 timestamping closes that and is Phase 3.
+CREATE TABLE tender_versions (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  draft_id        UUID NOT NULL REFERENCES tender_drafts(id) ON DELETE CASCADE,
+  version         INT NOT NULL,
+  reason          TEXT NOT NULL CHECK (reason IN ('published','corrigendum','award','cancellation')),
+  snapshot        JSONB NOT NULL,
+  content_hash    TEXT NOT NULL,
+  prev_chain_hash TEXT NOT NULL DEFAULT '',
+  chain_hash      TEXT NOT NULL,
+  rule_set_version TEXT NOT NULL,
+  published_by    UUID NOT NULL REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_tender_versions_draft_version ON tender_versions (draft_id, version);
+
+CREATE TABLE corrigenda (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  draft_id       UUID NOT NULL REFERENCES tender_drafts(id) ON DELETE CASCADE,
+  version_id     UUID REFERENCES tender_versions(id),
+  corrigendum_no INT NOT NULL,
+  type           TEXT NOT NULL CHECK (type IN ('date_extension','amendment','cancellation','retender')),
+  reason         TEXT NOT NULL,
+  changes        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- NULL = bidders were never told. A real state worth seeing: an extension
+  -- nobody was told about is not an extension.
+  notified_at    TIMESTAMPTZ,
+  created_by     UUID NOT NULL REFERENCES users(id),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_corrigenda_draft_no ON corrigenda (draft_id, corrigendum_no);
+
+-- Deliberately NO foreign key to what it describes: an audit file must survive
+-- the deletion of its subject, and ON DELETE CASCADE would erase exactly the
+-- evidence an inspector came for. actor_name/actor_role are denormalised so the
+-- trail reports the role in force AT THE TIME, not today's.
+CREATE TABLE audit_events (
+  id          BIGSERIAL PRIMARY KEY,
+  org_id      UUID NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id   UUID NOT NULL,
+  action      TEXT NOT NULL,
+  actor_id    UUID,
+  actor_name  TEXT NOT NULL DEFAULT '',
+  actor_role  TEXT NOT NULL DEFAULT '',
+  changes     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ip_address  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX ix_audit_events_entity ON audit_events (entity_type, entity_id, created_at);
+CREATE INDEX ix_audit_events_org ON audit_events (org_id, created_at DESC);
+
+CREATE TABLE tender_committee_members (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  draft_id    UUID NOT NULL REFERENCES tender_drafts(id) ON DELETE CASCADE,
+  -- Nullable: a committee routinely includes someone from another department
+  -- with no account here, and the audit file must still name them.
+  user_id     UUID REFERENCES users(id),
+  committee   TEXT NOT NULL CHECK (committee IN ('opening','technical','financial','monitor')),
+  member_name TEXT NOT NULL,
+  designation TEXT NOT NULL DEFAULT '',
+  email       TEXT NOT NULL DEFAULT '',
+  is_chair    BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX ix_committee_draft ON tender_committee_members (draft_id, committee);
+
+
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Buyer-access requests (migration 0033)
+--
+-- The inbound path to becoming a buyer. 0031 made it operator-only (there was no
+-- way for an org to ASK); this adds the request. The APPROVAL is unchanged â€” an
+-- operator still decides and the conversion still runs through SetOrgTypeAsync,
+-- because a buyer publishes notices on the public portal under a department's name.
+--
+-- Mirrors org_join_requests (0030): one live request per subject (partial unique
+-- index), decided rows kept as history. The subject here is the ORG asking the
+-- platform, where there it was a person asking an org.
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+CREATE TABLE org_buyer_requests (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id        UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  requested_by  UUID NOT NULL REFERENCES users(id),
+  status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','approved','rejected','cancelled')),
+  -- The procuring-entity identity the org is CLAIMING: what the operator verifies
+  -- against, and what SetOrgTypeAsync writes onto the org on approval.
+  entity_type            TEXT
+    CHECK (entity_type IS NULL OR entity_type IN
+      ('central','state','psu','ulb','autonomous','cooperative','trust','private')),
+  ministry               TEXT,
+  department             TEXT,
+  office                 TEXT,
+  procuring_entity_code  TEXT,
+  -- Mandatory: an approval is a judgement and needs something to judge.
+  justification TEXT NOT NULL,
+  -- The operator's note (evidence checked, or reason for refusal). Shown on rejection.
+  decision_note TEXT,
+  decided_at    TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One LIVE request per org. Decided rows accumulate as history (reapply after reject);
+-- the service returns the existing pending row rather than erroring, so the button is idempotent.
+CREATE UNIQUE INDEX uq_buyer_requests_one_pending_per_org
+  ON org_buyer_requests (org_id) WHERE status = 'pending';
+
+CREATE INDEX ix_buyer_requests_status ON org_buyer_requests (status, created_at);
+CREATE INDEX ix_buyer_requests_org    ON org_buyer_requests (org_id, created_at DESC);
+
+-- 0033 also seeds notification templates: BUYER_REQUEST_SUBMITTED (Email â†’ a configured ops
+-- address, not a user), BUYER_REQUEST_APPROVED and BUYER_REQUEST_REJECTED (Email + InApp â†’ org).
+
