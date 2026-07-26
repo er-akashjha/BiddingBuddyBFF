@@ -2,6 +2,8 @@ using BiddingBuddy.Bff.Core.DTOs.Alerts;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
 using BiddingBuddy.Bff.Core.Entities;
+using BiddingBuddy.Bff.Core.Exceptions;
+using BiddingBuddy.Bff.Core.Helpers;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +22,13 @@ public class OrganizationService(
 {
     public async Task<OrgDetailDto> CreateAsync(Guid ownerId, CreateOrgDto dto, CancellationToken ct = default)
     {
+        // Refuse to hand this user a second workspace for a company that already has one.
+        // Before this check the insert was unconditional, so the second person from a company
+        // to sign up silently became the owner of an empty parallel org — same legal entity,
+        // disjoint bids/documents/compliance, neither side ever seeing the other.
+        var duplicate = await FindDuplicateAsync(ownerId, dto, ct);
+        if (duplicate is not null) throw new DuplicateOrganizationException(duplicate);
+
         var org = new Organization
         {
             OwnedBy           = ownerId,
@@ -70,6 +79,88 @@ public class OrganizationService(
         await SeedStarterAlertRuleAsync(org.Id, ownerId, org.PrimaryCategory, ct);
 
         return await GetAsync(org.Id, ownerId, ct);
+    }
+
+    /// <summary>
+    /// Does an active organization already represent this company? Returns the 409 payload
+    /// if so, null to proceed.
+    /// </summary>
+    /// <remarks>
+    /// Two signals with deliberately different strengths:
+    /// <list type="bullet">
+    /// <item><b>GSTIN — hard.</b> One GSTIN is one legal entity, so a match is conclusive and
+    /// there is no override. Checked first, and checked even when the caller passes
+    /// <c>AllowDuplicateName</c>: that flag is consent to a name coincidence, not to sharing
+    /// a tax registration.</item>
+    /// <item><b>Name — soft.</b> Unrelated firms genuinely share names, so this only warns;
+    /// the client re-submits with <c>AllowDuplicateName</c> to proceed.</item>
+    /// </list>
+    /// Inactive orgs are ignored throughout — a deactivated workspace should not block its own
+    /// company from starting again.
+    /// </remarks>
+    private async Task<OrgExistsDto?> FindDuplicateAsync(Guid userId, CreateOrgDto dto, CancellationToken ct)
+    {
+        var gstin = OrgIdentity.NormalizeGstin(dto.Gstin);
+        if (gstin is not null)
+        {
+            // .Replace(" ", "").ToUpper() in THIS order renders as upper(replace(gstin,' ','')),
+            // which is the expression migration 0030 indexes. Swapping the calls produces a
+            // different expression and silently drops to a sequential scan.
+            var byGstin = await db.Organizations
+                .Where(o => o.IsActive && o.Gstin != null && o.Gstin.Replace(" ", "").ToUpper() == gstin)
+                .Select(o => new { o.Id, o.Name, o.City })
+                .FirstOrDefaultAsync(ct);
+
+            if (byGstin is not null)
+                return await BuildConflictAsync(userId, byGstin.Id, byGstin.Name, byGstin.City,
+                                                match: "gstin", canOverride: false, ct);
+        }
+
+        if (dto.AllowDuplicateName) return null;
+
+        var normalized = OrgIdentity.NormalizeName(dto.Name);
+        var prefix = OrgIdentity.NamePrefix(dto.Name);
+        if (prefix is null || normalized.Length == 0) return null;
+
+        // Prefix in SQL, exact normalized comparison in C#. The database cannot run the
+        // suffix-stripping rules, and pulling every org to apply them would not scale — so
+        // narrow with something a btree can serve, then decide precisely on the candidates.
+        // The cap bounds a pathological prefix (one letter, thousands of orgs); overflowing it
+        // can only cause a missed warning, never a wrong block.
+        var candidates = await db.Organizations
+            .Where(o => o.IsActive && o.Name.ToLower().StartsWith(prefix))
+            .OrderBy(o => o.CreatedAt)
+            .Take(50)
+            .Select(o => new { o.Id, o.Name, o.City })
+            .ToListAsync(ct);
+
+        var byName = candidates.FirstOrDefault(c => OrgIdentity.NormalizeName(c.Name) == normalized);
+        if (byName is null) return null;
+
+        return await BuildConflictAsync(userId, byName.Id, byName.Name, byName.City,
+                                        match: "name", canOverride: true, ct);
+    }
+
+    /// <summary>Assembles the 409 body: the matched org, plus the caller's own live request
+    /// against it so a re-run of onboarding shows "waiting for approval" rather than
+    /// re-offering a button that would return the same row.</summary>
+    private async Task<OrgExistsDto> BuildConflictAsync(
+        Guid userId, Guid orgId, string orgName, string? city, string match, bool canOverride, CancellationToken ct)
+    {
+        var memberCount = await db.OrgMembers.CountAsync(m => m.OrgId == orgId && m.Status == "active", ct);
+
+        var existing = await db.OrgJoinRequests
+            .Where(r => r.OrgId == orgId && r.UserId == userId && r.Status == "pending")
+            .Select(r => new MyJoinRequestDto(
+                r.Id, r.OrgId, orgName, null, r.Status, r.Role, r.CreatedAt, r.DecidedAt))
+            .FirstOrDefaultAsync(ct);
+
+        return new OrgExistsDto(
+            Error:       "ORG_EXISTS",
+            Match:       match,
+            CanOverride: canOverride,
+            Org:         new DuplicateOrgSummaryDto(orgId, orgName, city, memberCount),
+            ExistingRequest: existing);
     }
 
     public async Task<OrgDetailDto> GetAsync(Guid orgId, Guid userId, CancellationToken ct = default)

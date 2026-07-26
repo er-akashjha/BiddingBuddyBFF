@@ -25,6 +25,18 @@ public class Bid
     public int ProgressPct { get; set; }
     public string? LossReason { get; set; }
     public decimal? WonValue { get; set; }
+
+    /// <summary>
+    /// unknown|required|exempt|not_required (migration 0029). Seeded from the tender's EMD
+    /// amount when the bid is created from a tender, then overridable — exemption is common
+    /// for MSME/NSIC/Startup sellers. Gates the whole EMD surface: only <c>required</c> makes
+    /// a missing instrument or an un-dispatched courier worth alerting about.
+    /// </summary>
+    public string EmdRequirement { get; set; } = "unknown";
+
+    /// <summary>MSME | NSIC | Startup | Other — only meaningful when EmdRequirement is 'exempt'.</summary>
+    public string? EmdExemptionBasis { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -34,4 +46,5 @@ public class Bid
     public ICollection<BidActivity> Activities { get; set; } = [];
     public ICollection<BidChecklistItem> ChecklistItems { get; set; } = [];
     public ICollection<BidComment> Comments { get; set; } = [];
+    public ICollection<BidDispatch> Dispatches { get; set; } = [];
 }

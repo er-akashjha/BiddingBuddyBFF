@@ -60,6 +60,11 @@ public record GrantListItemDto(
     string? Category,
     string Currency,
     decimal? AwardCeiling,
+    // Carried on the LIST, not just the detail: without a floor every row can only say
+    // "Up to $X", which reads as a cap on an unknown range rather than the range itself.
+    // Both stay nullable — an absent figure means the agency published none, and rendering
+    // either as 0 would claim the grant awards nothing.
+    decimal? AwardFloor,
     DateOnly? CloseDate,
     string? CloseDateExplanation,
     bool IsRolling,
@@ -122,6 +127,32 @@ public record GrantDocumentDto(
     string? FileName,
     string? Url,
     bool HasStoredKey);
+
+/// <summary>
+/// Filter options that exist in the corpus, with the number of grants behind each.
+///
+/// <para>This endpoint exists because the alternative is a hardcoded copy of the Grants.gov
+/// vocabulary in the client — 27 categories and 17 applicant types, most of which match nothing.
+/// Serving only populated values, with counts, is the difference between a filter a user can
+/// trust and one that teaches them their searches are broken.</para>
+/// </summary>
+public record GrantFacetsDto(
+    IReadOnlyList<GrantFacetValueDto> Categories,
+    IReadOnlyList<GrantFacetValueDto> ApplicantTypes,
+    IReadOnlyList<GrantFacetValueDto> Agencies);
+
+/// <param name="Value">Send this back as the filter value — a category label, applicant-type code, or agency name.</param>
+/// <param name="Count">Grants this option returns under the same scope the facets were requested with.</param>
+public record GrantFacetValueDto(string Value, long Count);
+
+/// <summary>Scope for a facet request — mirrors the status view the client is showing.</summary>
+public record GrantFacetRequestDto
+{
+    public string? Status { get; init; }
+    public bool? IsForecast { get; init; }
+    public string? Platform { get; init; }
+    public int Limit { get; init; } = 50;
+}
 
 public record PagedGrantListDto(
     IReadOnlyList<GrantListItemDto> Items,

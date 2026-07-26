@@ -1,5 +1,9 @@
 namespace BiddingBuddy.Bff.Core.DTOs.Orgs;
 
+/// <param name="AllowDuplicateName">Set by the client only after the user has been shown an
+/// existing organization with a matching name and chosen to create a separate workspace
+/// anyway. Ignored for a GSTIN match, which has no override. Appended last and defaulted so
+/// the existing positional constructions keep compiling.</param>
 public record CreateOrgDto(
     string Name,
     string? Slug,
@@ -14,7 +18,8 @@ public record CreateOrgDto(
     string? Website,
     string? GemSellerId,
     string? GemSellerName,
-    string? PrimaryCategory
+    string? PrimaryCategory,
+    bool AllowDuplicateName = false
 );
 
 public record UpdateOrgDto(

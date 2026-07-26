@@ -1,3 +1,4 @@
+using BiddingBuddy.Bff.Core.Constants;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Core.Options;
@@ -59,6 +60,9 @@ public class DeadlineScanService(
             sent += await ScanComplianceAsync(today, opt, ct);
             sent += await ScanDeliveryMilestonesAsync(today, ct);
             sent += await ScanEmdAsync(today, opt, ct);
+            sent += await ScanEmdDispatchDueAsync(today, opt, ct);
+            sent += await ScanEmdDeliveryOverdueAsync(today, ct);
+            sent += await ScanEmdInstrumentExpiryAsync(today, opt, ct);
 
             if (sent > 0)
                 log.LogInformation("[DeadlineScan] Run complete — {Sent} reminder(s) dispatched.", sent);
@@ -276,6 +280,180 @@ public class DeadlineScanService(
                 ["OrgId"]       = e.OrgId.ToString(),
                 ["EntityId"]    = e.Id.ToString(),
                 ["Link"]        = $"{FrontendBaseUrl}/payments",
+            }, ct);
+        }
+        return sent;
+    }
+
+    // ── EMD instrument: original paper still not couriered ──────────────────────
+    //
+    // The one that actually loses bids. An EMD furnished as a DD/BG/FDR is only valid once the
+    // ORIGINAL reaches the buyer, and no amount of "we paid it" helps if the envelope is still
+    // on someone's desk. Fires on an EMD whose cut-off is inside the lead window and which has
+    // no live outbound consignment against it.
+    private async Task<int> ScanEmdDispatchDueAsync(DateOnly today, DeadlineScanOptions opt, CancellationToken ct)
+    {
+        var horizon = today.AddDays(opt.EmdDispatchLeadDays);
+        var instrumentModes = EmdModes.Instrument.ToArray();
+        // returned/lost consignments do NOT count as sent — the buyer never got them, so the
+        // EMD is still effectively un-dispatched and the warning must keep applying.
+        var failedStatuses = DispatchStatuses.Failed.ToArray();
+
+        var rows = await db.EmdPayments
+            .AsNoTracking()
+            .Where(e => e.BidId != null && e.PaymentMode != null && instrumentModes.Contains(e.PaymentMode))
+            .Join(db.Bids, e => e.BidId, b => b.Id, (e, b) => new { Emd = e, Bid = b })
+            .Where(x => x.Bid.StatusCategory == "open"
+                     && x.Bid.EmdRequirement == EmdRequirements.Required)
+            .Where(x => (x.Emd.DueDate ?? x.Bid.DueDate) != null
+                     && (x.Emd.DueDate ?? x.Bid.DueDate) <= horizon)
+            .Where(x => !db.BidDispatches.Any(d =>
+                        d.BidId == x.Bid.Id
+                     && d.Purpose == "emd_instrument"
+                     && d.Direction == "outbound"
+                     && !failedStatuses.Contains(d.Status)))
+            .Select(x => new
+            {
+                EmdId = x.Emd.Id,
+                x.Emd.OrgId,
+                x.Emd.PaymentMode,
+                BidId = x.Bid.Id,
+                BidTitle = x.Bid.Title,
+                x.Bid.AssignedTo,
+                Cutoff = x.Emd.DueDate ?? x.Bid.DueDate,
+            })
+            .ToListAsync(ct);
+
+        var sent = 0;
+        foreach (var r in rows)
+        {
+            var days = r.Cutoff!.Value.DayNumber - today.DayNumber;
+
+            var recipients = r.AssignedTo is Guid a
+                ? await OneAsync(a, ct)
+                : await audience.ByRolesAsync(r.OrgId, BidRoles, null, ct);
+            if (recipients.Count == 0) continue;
+            if (!await TryClaimAsync(r.OrgId, "emd", r.EmdId, "EMD_DISPATCH_DUE", ct)) continue;
+
+            sent += await DispatchAsync("EMD_DISPATCH_DUE", NotificationCategory.Transactional, recipients, m => new()
+            {
+                ["FirstName"]       = FirstNameOf(m.Name),
+                ["BidTitle"]        = r.BidTitle,
+                ["InstrumentLabel"] = EmdModes.Label(r.PaymentMode),
+                ["DeliverBy"]       = r.Cutoff!.Value.ToString("dd MMM yyyy"),
+                ["DueText"]         = RelativeDayText(days),
+                ["OrgId"]           = r.OrgId.ToString(),
+                ["EntityId"]        = r.BidId.ToString(),
+                ["Link"]            = $"{FrontendBaseUrl}/bids/{r.BidId}?tab=emd",
+            }, ct);
+        }
+        return sent;
+    }
+
+    // ── EMD courier: sent, but nobody has confirmed it landed ───────────────────
+    private async Task<int> ScanEmdDeliveryOverdueAsync(DateOnly today, CancellationToken ct)
+    {
+        var inFlight = DispatchStatuses.InFlight.ToArray();
+
+        var rows = await db.BidDispatches
+            .AsNoTracking()
+            .Where(d => inFlight.Contains(d.Status) && d.DeliveredOn == null)
+            // Either the courier blew its own promised date, or the tender's cut-off has passed
+            // with the packet still in transit — the second is the graver of the two.
+            .Where(d => (d.ExpectedDeliveryOn != null && d.ExpectedDeliveryOn < today)
+                     || (d.DeliverBy != null && d.DeliverBy < today))
+            .Join(db.Bids, d => d.BidId, b => b.Id, (d, b) => new { D = d, Bid = b })
+            .Select(x => new
+            {
+                DispatchId = x.D.Id,
+                x.D.OrgId,
+                BidId = x.Bid.Id,
+                BidTitle = x.Bid.Title,
+                x.Bid.AssignedTo,
+                x.D.CourierName,
+                x.D.TrackingNumber,
+                x.D.DispatchedOn,
+                Expected = x.D.ExpectedDeliveryOn ?? x.D.DeliverBy,
+            })
+            .ToListAsync(ct);
+
+        var sent = 0;
+        foreach (var r in rows)
+        {
+            var days = r.Expected.HasValue ? r.Expected.Value.DayNumber - today.DayNumber : 0;
+
+            var recipients = r.AssignedTo is Guid a
+                ? await OneAsync(a, ct)
+                : await audience.ByRolesAsync(r.OrgId, BidRoles, null, ct);
+            if (recipients.Count == 0) continue;
+            if (!await TryClaimAsync(r.OrgId, "bid_dispatch", r.DispatchId, "EMD_DELIVERY_OVERDUE", ct)) continue;
+
+            sent += await DispatchAsync("EMD_DELIVERY_OVERDUE", NotificationCategory.Transactional, recipients, m => new()
+            {
+                ["FirstName"]      = FirstNameOf(m.Name),
+                ["BidTitle"]       = r.BidTitle,
+                ["CourierName"]    = r.CourierName ?? "the courier",
+                ["TrackingNumber"] = r.TrackingNumber ?? "—",
+                ["DispatchedOn"]   = r.DispatchedOn?.ToString("dd MMM yyyy") ?? "—",
+                ["ExpectedText"]   = RelativeDayText(days),
+                ["OrgId"]          = r.OrgId.ToString(),
+                ["EntityId"]       = r.BidId.ToString(),
+                ["Link"]           = $"{FrontendBaseUrl}/bids/{r.BidId}?tab=emd",
+            }, ct);
+        }
+        return sent;
+    }
+
+    // ── EMD instrument: bank guarantee about to lapse ───────────────────────────
+    //
+    // Goes to finance rather than the bid owner: extending a BG is a bank errand, and it is the
+    // same audience that already fields EMD_STUCK. Refunded/forfeited EMDs are excluded — the
+    // instrument is spent, its expiry is nobody's problem.
+    private async Task<int> ScanEmdInstrumentExpiryAsync(DateOnly today, DeadlineScanOptions opt, CancellationToken ct)
+    {
+        var horizon = today.AddDays(opt.EmdExpiryLeadDays);
+        var expiringModes = EmdModes.Expiring.ToArray();
+
+        var rows = await db.EmdPayments
+            .AsNoTracking()
+            .Where(e => e.ValidUntil != null && e.ValidUntil <= horizon
+                     && e.PaymentMode != null && expiringModes.Contains(e.PaymentMode)
+                     && e.Status != "refunded" && e.Status != "forfeited"
+                     && e.BidId != null)
+            .Join(db.Bids, e => e.BidId, b => b.Id, (e, b) => new { Emd = e, Bid = b })
+            .Where(x => x.Bid.StatusCategory == "open")
+            .Select(x => new
+            {
+                EmdId = x.Emd.Id,
+                x.Emd.OrgId,
+                x.Emd.PaymentMode,
+                x.Emd.Amount,
+                x.Emd.ValidUntil,
+                BidId = x.Bid.Id,
+                BidTitle = x.Bid.Title,
+            })
+            .ToListAsync(ct);
+
+        var sent = 0;
+        foreach (var r in rows)
+        {
+            var days = r.ValidUntil!.Value.DayNumber - today.DayNumber;
+
+            var recipients = await audience.ByRolesAsync(r.OrgId, FinanceRoles, null, ct);
+            if (recipients.Count == 0) continue;
+            if (!await TryClaimAsync(r.OrgId, "emd", r.EmdId, "EMD_BG_EXPIRING", ct)) continue;
+
+            sent += await DispatchAsync("EMD_BG_EXPIRING", NotificationCategory.Transactional, recipients, m => new()
+            {
+                ["FirstName"]       = FirstNameOf(m.Name),
+                ["BidTitle"]        = r.BidTitle,
+                ["InstrumentLabel"] = EmdModes.Label(r.PaymentMode),
+                ["Amount"]          = r.Amount.ToString("N0"),
+                ["ValidUntil"]      = r.ValidUntil!.Value.ToString("dd MMM yyyy"),
+                ["ExpiryText"]      = RelativeDayText(days),
+                ["OrgId"]           = r.OrgId.ToString(),
+                ["EntityId"]        = r.BidId.ToString(),
+                ["Link"]            = $"{FrontendBaseUrl}/bids/{r.BidId}?tab=emd",
             }, ct);
         }
         return sent;

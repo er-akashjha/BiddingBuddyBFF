@@ -12,9 +12,11 @@ public class OrgContextMiddleware(RequestDelegate next)
 {
     // /api/invites is exempt because the caller is by definition not yet a member
     // of the org the invite points at (accept/decline happen before membership).
+    // /api/join-requests is exempt for the same reason pointing the other way: asking to
+    // join an org is something only a non-member ever does.
     // /api/devices is exempt because a push device belongs to a user, not an org
     // (the mobile app registers its FCM token before/independent of any org context).
-    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/api/devices", "/internal", "/swagger", "/health", "/sitemap"];
+    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/api/join-requests", "/api/devices", "/internal", "/swagger", "/health", "/sitemap"];
 
     public async Task InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo)
     {

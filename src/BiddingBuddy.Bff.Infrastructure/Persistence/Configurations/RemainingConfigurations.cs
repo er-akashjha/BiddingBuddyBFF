@@ -396,9 +396,66 @@ public class EmdPaymentConfiguration : IEntityTypeConfiguration<EmdPayment>
         b.Property(x => x.Notes).HasColumnName("notes");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+
+        // Instrument details (migration 0029)
+        b.Property(x => x.InstrumentNumber).HasColumnName("instrument_number");
+        b.Property(x => x.InstrumentDate).HasColumnName("instrument_date");
+        b.Property(x => x.ValidUntil).HasColumnName("valid_until");
+        b.Property(x => x.IssuingBranch).HasColumnName("issuing_branch");
+        b.Property(x => x.Favouring).HasColumnName("favouring");
+        b.Property(x => x.DueDate).HasColumnName("due_date");
+        b.Property(x => x.DocumentId).HasColumnName("document_id");
+
         b.HasOne(x => x.Organization).WithMany(x => x.EmdPayments).HasForeignKey(x => x.OrgId);
         b.HasOne(x => x.Bid).WithMany().HasForeignKey(x => x.BidId).IsRequired(false);
         b.HasOne(x => x.Tender).WithMany().HasForeignKey(x => x.TenderId).IsRequired(false);
+        b.HasOne(x => x.Document).WithMany().HasForeignKey(x => x.DocumentId).IsRequired(false);
+    }
+}
+
+/// <summary>
+/// The courier leg of an EMD instrument (migration 0029). See <see cref="BidDispatch"/> for
+/// why this is its own table rather than columns on <c>emd_payments</c>.
+/// </summary>
+public class BidDispatchConfiguration : IEntityTypeConfiguration<BidDispatch>
+{
+    public void Configure(EntityTypeBuilder<BidDispatch> b)
+    {
+        b.ToTable("bid_dispatches");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).HasColumnName("id").HasDefaultValueSql("gen_random_uuid()");
+        b.Property(x => x.OrgId).HasColumnName("org_id");
+        b.Property(x => x.BidId).HasColumnName("bid_id");
+        b.Property(x => x.EmdPaymentId).HasColumnName("emd_payment_id");
+        b.Property(x => x.Purpose).HasColumnName("purpose").HasDefaultValue("emd_instrument");
+        b.Property(x => x.Direction).HasColumnName("direction").HasDefaultValue("outbound");
+        b.Property(x => x.CourierName).HasColumnName("courier_name");
+        b.Property(x => x.TrackingNumber).HasColumnName("tracking_number");
+        b.Property(x => x.TrackingUrl).HasColumnName("tracking_url");
+        b.Property(x => x.DispatchedOn).HasColumnName("dispatched_on");
+        b.Property(x => x.DispatchedBy).HasColumnName("dispatched_by");
+        b.Property(x => x.RecipientName).HasColumnName("recipient_name");
+        b.Property(x => x.RecipientDesignation).HasColumnName("recipient_designation");
+        b.Property(x => x.RecipientAddress).HasColumnName("recipient_address");
+        b.Property(x => x.RecipientPhone).HasColumnName("recipient_phone");
+        b.Property(x => x.DeliverBy).HasColumnName("deliver_by");
+        b.Property(x => x.ExpectedDeliveryOn).HasColumnName("expected_delivery_on");
+        b.Property(x => x.DeliveredOn).HasColumnName("delivered_on");
+        b.Property(x => x.ReceivedBy).HasColumnName("received_by");
+        b.Property(x => x.Status).HasColumnName("status").HasDefaultValue("draft");
+        b.Property(x => x.PodDocumentId).HasColumnName("pod_document_id");
+        b.Property(x => x.Notes).HasColumnName("notes");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+
+        b.HasIndex(x => x.BidId);
+        b.HasIndex(x => x.OrgId);
+
+        b.HasOne(x => x.Organization).WithMany().HasForeignKey(x => x.OrgId);
+        b.HasOne(x => x.Bid).WithMany(x => x.Dispatches).HasForeignKey(x => x.BidId);
+        b.HasOne(x => x.EmdPayment).WithMany(x => x.Dispatches).HasForeignKey(x => x.EmdPaymentId).IsRequired(false);
+        b.HasOne(x => x.Dispatcher).WithMany().HasForeignKey(x => x.DispatchedBy).IsRequired(false);
+        b.HasOne(x => x.PodDocument).WithMany().HasForeignKey(x => x.PodDocumentId).IsRequired(false);
     }
 }
 

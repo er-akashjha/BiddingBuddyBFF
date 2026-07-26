@@ -19,6 +19,7 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<Organization> Organizations => Set<Organization>();
     public DbSet<OrgMember> OrgMembers => Set<OrgMember>();
     public DbSet<OrganizationInvite> OrganizationInvites => Set<OrganizationInvite>();
+    public DbSet<OrgJoinRequest> OrgJoinRequests => Set<OrgJoinRequest>();
 
     // Grants (GRANT product line). A global corpus like Tenders — no org_id; org-scoped grant
     // tables carry their own tenancy.
@@ -44,6 +45,7 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<BidComment> BidComments => Set<BidComment>();
     public DbSet<BidAttachment> BidAttachments => Set<BidAttachment>();
     public DbSet<BidDocument> BidDocuments => Set<BidDocument>();
+    public DbSet<BidDispatch> BidDispatches => Set<BidDispatch>();
 
     // Compliance
     public DbSet<ComplianceRequirement> ComplianceRequirements => Set<ComplianceRequirement>();
