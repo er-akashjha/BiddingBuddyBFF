@@ -9,6 +9,14 @@ public class User
     public string? Phone { get; set; }
     public string? PasswordHash { get; set; }
     public bool IsActive { get; set; } = true;
+
+    /// <summary>
+    /// A platform operator (one of ours), permitted to work the JWT-gated <c>/api/admin/*</c>
+    /// surface — currently the buyer-access review queue. Not an org role: it is orthogonal to
+    /// every <c>org_members.role</c> and is never granted through any client-facing route.
+    /// Defaults false; set directly in the database. Migration <c>0034</c>.
+    /// </summary>
+    public bool IsPlatformAdmin { get; set; }
     public DateTime? LastLoginAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

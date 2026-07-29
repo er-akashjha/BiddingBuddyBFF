@@ -783,7 +783,7 @@ public class AuthService(
         var providers = oauthAccounts.Select(a => a.Provider).ToList();
 
         return new UserDto(user.Id, user.Email, user.Name, user.AvatarUrl, user.Phone,
-            orgDtos, providers);
+            orgDtos, providers, user.IsPlatformAdmin);
     }
 
     public async Task UnlinkProviderAsync(Guid userId, string provider, CancellationToken ct = default)

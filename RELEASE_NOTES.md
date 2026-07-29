@@ -1,6 +1,48 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v39**
+Current version: **v40**
+
+---
+
+## v40 — 2026-07-29 19:21 IST
+
+**An in-app way for a platform operator to approve buyer-access requests — closing the govt-tender
+onboarding loop that was previously a manual `X-Api-Key` curl.** Migration `0034`. Requires ui v34.
+
+v39 gave an org a front door to *ask* for buyer status, but the *decision* was still only reachable
+by curling `/internal/organizations/buyer-requests/{id}/approve` with the pipeline key. That is fine
+for a founder but it is not an operational loop. This adds a JWT-gated operator surface so approvals
+happen with a real logged-in identity — **without** re-opening `org_type` to customers.
+
+### What's new
+
+- **A platform-operator identity.** Migration `0034` adds `users.is_platform_admin` (boolean, default
+  **false** — fails closed). There is deliberately no client-facing route to set it: an operator is
+  granted directly in the database (`UPDATE users SET is_platform_admin = TRUE WHERE email = …`),
+  exactly like the trust it represents. Surfaced on `GET /api/auth/me` (`isPlatformAdmin`) so the SPA
+  can render the operator nav; the server is the real gate.
+- **`[PlatformAdmin]` authorization filter** (`Api/Filters/PlatformAdminAttribute.cs`) — mirrors
+  `RequireOrgCapabilityAttribute` but for the operator flag. **Checked against the database on every
+  call, not a JWT claim**, so a revoked operator loses access immediately rather than at token expiry.
+  Refuses with `403 code:"FORBIDDEN_PLATFORM_ADMIN"` (distinguishable from the org 403), or `401` if
+  the caller isn't authenticated at all.
+- **`AdminBuyerRequestsController`** at `/api/admin/buyer-requests` (`[Authorize]` + `[PlatformAdmin]`):
+  `GET` (queue, `?status=`), `POST {id}/approve`, `POST {id}/reject`. **Delegates to the identical
+  `IBuyerRequestService` methods the `/internal` controller uses** — approval still runs through
+  `SetOrgTypeAsync` with the org's claimed identity, so "approved in-app" and "approved by curl" can't
+  drift into two different notions of a buyer. Only the gate differs.
+- **`/api/admin` is exempt from `OrgContextMiddleware`.** The queue spans every org, so these routes
+  carry no `X-Org-Id`; the platform-admin flag is the only gate, which is why it fails closed.
+
+### Notes
+
+- **The API-key `/internal` path is unchanged and still valid** — this is an additional door, not a
+  replacement. Both remain in step because they call the same service.
+- **Known limitation:** the audit row still records the operator as `operator (internal API key)`
+  (actorId NULL), because `ApproveAsync` was not re-signatured to take the acting user. Recording the
+  specific operator who clicked approve is a follow-up; it does not change the decision.
+- No JWT-minting change (the flag is read from the DB, not carried in the token), so existing sessions
+  keep working; a granted operator sees the surface after their next `/api/auth/me` (login or reload).
 
 ---
 

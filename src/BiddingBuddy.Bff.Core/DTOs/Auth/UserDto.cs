@@ -7,7 +7,16 @@ public record UserDto(
     string? AvatarUrl,
     string? Phone,
     IReadOnlyList<UserOrgDto> Organizations,
-    IReadOnlyList<string> ConnectedProviders
+    IReadOnlyList<string> ConnectedProviders,
+
+    /// <summary>
+    /// True for a platform operator (one of ours). Drives whether the SPA renders the
+    /// operator-only admin surface (the buyer-access review queue). Orthogonal to any org role,
+    /// so it rides on the user, not on <see cref="UserOrgDto"/>. Appended and defaulted so older
+    /// callers and any other construction keep compiling. The server is the real gate — every
+    /// <c>/api/admin/*</c> route re-checks this flag regardless of what the client renders.
+    /// </summary>
+    bool IsPlatformAdmin = false
 );
 
 /// <param name="GemSellerName">The org's seller identity on GeM award ladders. Carried on /me (like

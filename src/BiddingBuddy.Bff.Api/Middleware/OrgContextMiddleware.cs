@@ -16,7 +16,11 @@ public class OrgContextMiddleware(RequestDelegate next)
     // join an org is something only a non-member ever does.
     // /api/devices is exempt because a push device belongs to a user, not an org
     // (the mobile app registers its FCM token before/independent of any org context).
-    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/api/join-requests", "/api/devices", "/internal", "/swagger", "/health", "/sitemap"];
+    // /api/admin is exempt because it is operator tooling that spans EVERY organization — the
+    // buyer-access queue has no single X-Org-Id to scope to. It is not left ungated: every route
+    // under it is [PlatformAdmin], a database-checked flag, so membership is simply the wrong
+    // question there.
+    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/api/join-requests", "/api/devices", "/api/admin", "/internal", "/swagger", "/health", "/sitemap"];
 
     public async Task InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo)
     {
