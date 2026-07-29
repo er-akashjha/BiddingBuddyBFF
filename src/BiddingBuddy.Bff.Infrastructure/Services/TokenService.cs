@@ -66,6 +66,8 @@ public class TokenService(IConfiguration config) : ITokenService
         if (data.Client is not null) claims.Add(new Claim("client", data.Client));
         if (data.CodeChallenge is not null) claims.Add(new Claim("code_challenge", data.CodeChallenge));
         if (data.RedirectUri is not null) claims.Add(new Claim("redirect_uri", data.RedirectUri));
+        // Web-only: the allowlisted origin the sign-in began on, so the callback returns there.
+        if (data.Origin is not null) claims.Add(new Claim("origin", data.Origin));
 
         var token = new JwtSecurityToken(
             issuer: _issuer,
@@ -100,7 +102,8 @@ public class TokenService(IConfiguration config) : ITokenService
                 principal.FindFirst("client")?.Value,
                 principal.FindFirst("code_challenge")?.Value,
                 principal.FindFirst("redirect_uri")?.Value,
-                principal.FindFirst("nonce")?.Value);
+                principal.FindFirst("nonce")?.Value,
+                principal.FindFirst("origin")?.Value);
             return true;
         }
         catch

@@ -212,7 +212,9 @@ public class AuthController(
         }
         else
         {
-            stateData = new OAuthStateData(returnUrl, Nonce: nonce);
+            // Seal the (allowlisted) origin this sign-in began on, so the callback returns the user to
+            // the SAME branded app (e.g. grants.tendersagent.com) instead of the default frontend.
+            stateData = new OAuthStateData(returnUrl, Nonce: nonce, Origin: ResolveAllowedOrigin());
         }
 
         var state = tokenService.GenerateStateToken(stateData);
@@ -240,6 +242,38 @@ public class AuthController(
                (redirectUri.StartsWith("exp://") || redirectUri.StartsWith("exps://"));
     }
 
+    /// <summary>
+    /// The frontend origin this web sign-in was STARTED from, if it is an allowlisted branded domain
+    /// (<c>Frontend:AllowedOrigins</c>) — e.g. <c>https://grants.tendersagent.com</c>. Sealed into the
+    /// signed state at initiation so the callback can return the user to the SAME app instead of the
+    /// single default <c>Frontend:BaseUrl</c>. The Host header travels intact end-to-end (Caddy and the
+    /// SPA's nginx both preserve it); scheme is forced https outside Development. Returns null when the
+    /// origin isn't allowlisted, and the callback then falls back to the default. Any localhost is
+    /// accepted in Development so a local second SPA can test the flow.
+    /// </summary>
+    private string? ResolveAllowedOrigin()
+    {
+        if (string.IsNullOrEmpty(Request.Host.Value)) return null;
+        var scheme = env.IsDevelopment() ? Request.Scheme : "https";
+        var origin = $"{scheme}://{Request.Host.Value}";
+        if (env.IsDevelopment() && Request.Host.Host is "localhost" or "127.0.0.1")
+            return origin;
+        var allow = config.GetSection("Frontend:AllowedOrigins").Get<string[]>() ?? [];
+        return allow.Any(o => string.Equals(o.TrimEnd('/'), origin, StringComparison.OrdinalIgnoreCase))
+            ? origin
+            : null;
+    }
+
+    /// <summary>
+    /// Where the web callback sends the browser: the origin the flow began on when one was sealed into
+    /// the (signed, tamper-proof) state, else the default <c>Frontend:BaseUrl</c>. Trusting
+    /// <c>state.Origin</c> here is safe — it was allowlisted at initiation and the state is HMAC-signed.
+    /// </summary>
+    private string ResolveFrontendBase(OAuthStateData state) =>
+        !string.IsNullOrEmpty(state.Origin)
+            ? state.Origin!
+            : (config["Frontend:BaseUrl"] ?? "http://localhost:3000");
+
     /// <summary>OAuth callback — exchanges code for tokens and redirects to the frontend.</summary>
     [HttpGet("oauth/{provider}/callback")]
     [ProducesResponseType(StatusCodes.Status302Found)]
@@ -265,7 +299,7 @@ public class AuthController(
         {
             var tokens = await authService.HandleOAuthCallbackAsync(provider, code, stateData.Nonce, ct);
 
-            var frontendBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
+            var frontendBase = ResolveFrontendBase(stateData);
             var callbackPath = config["Frontend:AuthCallbackPath"] ?? "/auth/callback";
             // is_new is a cosmetic hint for the SPA (welcome copy) — onboarding routing
             // is gated on "authenticated but no org", not on this flag.
@@ -280,7 +314,7 @@ public class AuthController(
         }
         catch (Exception ex)
         {
-            var frontendBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
+            var frontendBase = ResolveFrontendBase(stateData);
             return Redirect($"{frontendBase}/auth/error?message={Uri.EscapeDataString(ex.Message)}");
         }
     }

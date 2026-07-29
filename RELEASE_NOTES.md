@@ -1,8 +1,53 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v40**
+Current version: **v42**
 
 ---
+
+## v42 — 2026-07-29 23:47 IST
+
+**OAuth sign-in now works from a SECOND branded frontend origin (e.g. `grants.tendersagent.com`),
+not just the single hardcoded `Frontend:BaseUrl`.**
+
+Until now every OAuth login redirected the browser back to the one `Frontend:BaseUrl`
+(tendersagent.com), so a Google/GitHub sign-in *started* on a second SPA on its own subdomain landed
+on the wrong app. The web flow now carries the initiating origin through the sign-in. Needed for the
+grants-ui launch (`grants.tendersagent.com`); see `grants-ui/PROJECT.md`.
+
+- `InitiateOAuth` resolves the origin the sign-in began on from the (end-to-end-preserved) `Host`
+  header, admits it only if it's on the new **`Frontend:AllowedOrigins`** allowlist (any localhost in
+  Development), and seals it into the signed state as a new `origin` claim.
+- `OAuthCallback` returns the browser to `state.Origin` when present, else the default
+  `Frontend:BaseUrl` — for both the success and error redirects. Safe to trust: the origin was
+  allowlisted at initiation and the state JWT is HMAC-signed.
+- `OAuthStateData` gains a trailing optional `Origin` (positional-safe — existing callers unchanged);
+  `TokenService` (de)serialises the `origin` claim.
+- `appsettings.json` seeds `Frontend:AllowedOrigins = [https://tendersagent.com,
+  https://grants.tendersagent.com]`, so prod works with no extra env (override via env if the domains
+  change).
+
+Mobile flow untouched (it bounces to an allowlisted custom-scheme `redirect_uri`, not
+`Frontend:BaseUrl`). CORS unchanged and unaffected — both SPAs call `/api` **same-origin** through
+their own nginx, so the browser never makes a cross-origin request to the BFF. Builds clean; deploy
+alongside grants-ui. (Counter raced with a parallel session that took v41 — re-check before commit.)
+
+## v41 — 2026-07-29 23:12 IST
+
+**The authenticated tenders list now hides closed / closing-too-soon tenders — for every sort.**
+The list only shows tenders that are still biddable (bid deadline at least ~2 days out). Requires
+Services v16.
+
+- `TenderSearchQueryDto` gains `OnlyBiddable` (bool, default false), forwarded to BiddingBuddyServices
+  as `OnlyBiddable` by `BiddingBuddyServicesClient.BuildSearchUrl` when set.
+- `TendersController.List` and `ListPaged` **force** `OnlyBiddable = true` (`query with { … }`) rather
+  than trusting the client, so the guarantee holds regardless of query string. Services applies the
+  actual deadline floor (see Services v16).
+- **Scope is deliberate.** `PublicTendersController` (guest `/explore`) and `SsrController` (SEO hubs)
+  call the same client methods but never set the flag, so those surfaces still show the full corpus —
+  the floor is authenticated-list-only. Selecting Status = Closed/Awarded on the list overrides the
+  floor server-side.
+
+No schema change; no migration.
 
 ## v40 — 2026-07-29 19:21 IST
 

@@ -646,6 +646,9 @@ public class BiddingBuddyServicesClient : IBiddingBuddyServicesClient, IGrantSer
         if (q.MaxValue.HasValue)    qs["MaxValue"]    = q.MaxValue.Value.ToString("F2");
         if (!string.IsNullOrWhiteSpace(q.SortBy))             qs["SortBy"]             = q.SortBy;
         if (!string.IsNullOrWhiteSpace(q.SortOrder))          qs["SortOrder"]          = q.SortOrder;
+        // Only forwarded when the authenticated tenders list opts in — keeps closed/closing-too-soon
+        // tenders out of the discovery list without affecting guest/SSR callers (which never set it).
+        if (q.OnlyBiddable)                                   qs["OnlyBiddable"]       = "true";
 
         qs["Page"]     = Math.Max(1, q.Page).ToString();
         qs["PageSize"] = Math.Clamp(q.PageSize, 1, 100).ToString();
