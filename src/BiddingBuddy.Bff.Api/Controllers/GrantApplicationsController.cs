@@ -14,7 +14,9 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Route("api/grant-applications")]
 [Authorize]
 [Produces("application/json")]
-public class GrantApplicationsController(IGrantApplicationService apps) : BffControllerBase
+public class GrantApplicationsController(
+    IGrantApplicationService apps,
+    IGrantApprovalFormService approvalForms) : BffControllerBase
 {
     /// <summary>The org's applications. Filter by <c>stage</c>, <c>statusCategory</c> (open|closed),
     /// <c>assignedTo</c> ('me' or a user id), free-text <c>q</c>; sort with <c>sort</c>.</summary>
@@ -79,6 +81,20 @@ public class GrantApplicationsController(IGrantApplicationService apps) : BffCon
     {
         await apps.DeleteAsync(id, CurrentOrgId, ct);
         return NoContent();
+    }
+
+    /// <summary>
+    /// Download the pre-filled "Approval to Proceed" Word form for this application. Streamed as a
+    /// .docx (not JSON), so the SPA fetches it with the auth + org headers and saves the returned blob.
+    /// </summary>
+    [HttpGet("{id:guid}/approval-form.docx")]
+    [Produces("application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
+    [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(FileContentResult))]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ApprovalForm(Guid id, CancellationToken ct)
+    {
+        var form = await approvalForms.BuildAsync(id, CurrentOrgId, ct);
+        return File(form.Content, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", form.FileName);
     }
 
     // ── Activities ────────────────────────────────────────────────────────────

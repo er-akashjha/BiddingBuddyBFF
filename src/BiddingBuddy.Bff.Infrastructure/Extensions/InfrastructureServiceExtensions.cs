@@ -125,6 +125,8 @@ public static class InfrastructureServiceExtensions
         // Grant pursuit lifecycle (org-scoped): saved grants + applications + proposal authoring.
         services.AddScoped<ISavedGrantService, SavedGrantService>();
         services.AddScoped<IGrantApplicationService, GrantApplicationService>();
+        // Pre-filled "Approval to Proceed" Word form, downloaded when a grant enters the pipeline.
+        services.AddScoped<IGrantApprovalFormService, GrantApprovalFormService>();
 
         // Deadline / expiry reminder scan (bids, invoices, compliance, delivery, EMD)
         services.AddScoped<INotificationAudienceResolver, NotificationAudienceResolver>();

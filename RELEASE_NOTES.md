@@ -1,8 +1,35 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v43**
+Current version: **v44**
 
 ---
+
+## v44 — 2026-08-01 19:49 IST
+
+**Pre-filled "Approval to Proceed" Word form on the grant pipeline.** A new authorized, org-scoped
+endpoint streams a filled `.docx` for a grant application; the grants SPA downloads it when a grant is
+added to Applications. No schema change, no migration.
+
+- **Endpoint** — `GET /api/grant-applications/{id}/approval-form.docx` on `GrantApplicationsController`
+  (membership-only, same org gate as its siblings). Returns `File(bytes, <docx mime>, <name>)`; a
+  per-action `[Produces(docx)]` overrides the controller's JSON default so Swagger stays honest.
+- **Generator** — new `IGrantApprovalFormService` / `GrantApprovalFormService` (`Infrastructure/Services`,
+  registered in the GRANT block of `InfrastructureServiceExtensions`). Loads the application org-scoped
+  (mirrors `LoadAsync`; wrong-org ⇒ `KeyNotFoundException` ⇒ 404), joins the source grant via
+  `IGrantServicesClient.GetRawGrantAsync(MongoGrantId)` when linked, and fills the template. **Degrades
+  to the application's own snapshot — never throws — when the grant is unlinked, archived (null), or
+  upstream is down.**
+- **Template** — `Resources/GrantApprovalForm.Template.docx` embedded (pinned `LogicalName`), filled via
+  **DocumentFormat.OpenXml** (new package) with per-paragraph run aggregation so a token split across
+  runs still resolves. Auto-fills Opportunity Title, Funding Agency, Application Deadline, Submission
+  Portal, Total Funding Available, Range of Award Values, Expected # of Awards, Match/Cost-Share
+  (+ Total Budget from the snapshot); budget/summary/signature blocks stay blank. `null` money renders
+  blank, never `$0`.
+- **CORS** — `AllowFrontend` now exposes `Content-Disposition` (dev + prod branches) so the SPA can read
+  the server-composed file name.
+- **Tests** — `GrantApprovalFormServiceTests` (4, all green): fills grant fields with no residual tokens,
+  wrong-org ⇒ 404, degrades on a null grant, and skips upstream entirely when unlinked. `dotnet build`
+  + `dotnet test` clean.
 
 ## v43 — 2026-08-01 11:36 IST
 

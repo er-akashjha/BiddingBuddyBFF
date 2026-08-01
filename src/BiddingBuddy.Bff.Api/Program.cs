@@ -119,6 +119,7 @@ builder.Services.AddCors(opt =>
                        (uri.Host == "localhost" || uri.Host == "127.0.0.1"))
                   .AllowAnyHeader()
                   .AllowAnyMethod()
+                  .WithExposedHeaders("Content-Disposition")
                   .AllowCredentials();
         }
         else
@@ -126,6 +127,7 @@ builder.Services.AddCors(opt =>
             policy.WithOrigins(frontendUrl)
                   .AllowAnyHeader()
                   .AllowAnyMethod()
+                  .WithExposedHeaders("Content-Disposition")
                   .AllowCredentials();
         }
     }));
