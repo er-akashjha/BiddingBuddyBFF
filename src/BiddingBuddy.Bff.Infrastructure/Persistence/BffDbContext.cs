@@ -29,6 +29,16 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     // tables carry their own tenancy.
     public DbSet<GrantOpportunity> GrantOpportunities => Set<GrantOpportunity>();
 
+    // Grant pursuit lifecycle (org-scoped): saved grants, applications, and proposal artifacts.
+    public DbSet<SavedGrant> SavedGrants => Set<SavedGrant>();
+    public DbSet<GrantApplication> GrantApplications => Set<GrantApplication>();
+    public DbSet<GrantApplicationActivity> GrantApplicationActivities => Set<GrantApplicationActivity>();
+    public DbSet<GrantApplicationChecklistItem> GrantApplicationChecklistItems => Set<GrantApplicationChecklistItem>();
+    public DbSet<GrantNarrativeSection> GrantNarrativeSections => Set<GrantNarrativeSection>();
+    public DbSet<GrantBudgetLineItem> GrantBudgetLineItems => Set<GrantBudgetLineItem>();
+    public DbSet<GrantReview> GrantReviews => Set<GrantReview>();
+    public DbSet<GrantSubmission> GrantSubmissions => Set<GrantSubmission>();
+
     // Tenders
     public DbSet<Tender> Tenders => Set<Tender>();
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();

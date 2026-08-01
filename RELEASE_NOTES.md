@@ -1,8 +1,37 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v42**
+Current version: **v43**
 
 ---
+
+## v43 — 2026-08-01 11:36 IST
+
+**Grant pursuit lifecycle — saved grants, applications, and full proposal authoring (greenfield,
+org-scoped). Mirrors the `bids` pattern with a grant stage vocabulary.** Migrations `0035`–`0038`.
+
+- **Saved grants** (`saved_grants`, migration `0035`) — `SavedGrantsController` at `api/saved-grants`:
+  `GET /`, `GET /ids`, `POST /` (idempotent upsert on org+grant), `DELETE /{mongoGrantId}`. Stores a
+  client-supplied **snapshot** of the grant (title/agency/deadline/…) keyed by `mongo_grant_id`, so
+  the saved list needs no Mongo round-trip and no `grant_opportunities` mirror.
+- **Applications** (`grant_applications` + `_activities` + `_checklist_items`, migration `0036`) —
+  `GrantApplicationsController` at `api/grant-applications`: list (filter by stage/statusCategory/
+  assignee/q + sort), get, create (idempotent per grant when started from one; seeds a plan
+  checklist + a "created" activity), update, **PATCH `/stage`** (logs a `stage_change`), delete, plus
+  activities and checklist CRUD. Generated `status_category` (`Awarded`/`Declined`/`Dropped` →
+  `closed`) mirrors `bids`. Stage vocabulary: Qualifying → Planning → Writing → Review → Submitted →
+  Awarded (+ Declined/Dropped).
+- **Proposal authoring** (migrations `0037`–`0038`): `grant_narrative_sections`,
+  `grant_budget_line_items`, `grant_reviews`, `grant_submissions`. Nested routes under an
+  application: `GET/PATCH /narrative[/{sectionId}]` (default section set seeded on first read; word
+  count recomputed from content), `GET/POST/PATCH/DELETE /budget[/{lineId}]`,
+  `.../reviews[/{reviewId}]`, `.../submissions[/{submissionId}]`. **Recording a submission advances
+  the application stage** (submitted/awarded/declined) and logs it. A `readiness` score is recomputed
+  from checklist + narrative-completion + budget-present + review-approved after each mutation.
+- **Scoping:** all routes `[Authorize]` + `BffControllerBase` (`CurrentOrgId`/`CurrentUserId`),
+  membership-only like bids (no capability gate); every query is `.Where(x => x.OrgId == orgId)`.
+  Child rows link by navigation, never the store-generated scalar id (the `gen_random_uuid()`
+  FK-ordering rule). New DbSets + `IEntityTypeConfiguration`s (explicit `.HasColumnName` per column);
+  services registered in `InfrastructureServiceExtensions`. `dotnet build` clean.
 
 ## v42 — 2026-07-29 23:47 IST
 

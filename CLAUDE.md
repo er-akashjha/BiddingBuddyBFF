@@ -90,6 +90,8 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | Invites | `/api/invites` | `POST /accept`, `POST /decline` (JWT, **no X-Org-Id** — exempt from org middleware since the caller isn't a member yet). Accept validates the logged-in email matches the invited email, then creates/reactivates the membership |
 | Tenders | `/api/tenders` | List/filter, `GET /paged` (paginated wrapper over BiddingBuddyServices), get detail, save, track, documents, AI analysis |
 | Bids | `/api/bids` | List, create, update, stage progression (7 stages), activities, **comments**, checklist, `GET /by-tender?tenderIds=` (batched already-in-pipeline lookup for tender list/detail) |
+| Saved grants | `/api/saved-grants` | Save/track grant opportunities (org-scoped snapshot keyed by `mongo_grant_id`): list, ids, upsert, delete. Migration `0035` |
+| Grant applications | `/api/grant-applications` | **Grant pursuit lifecycle** (grants analog of bids): list/get/create/update/`PATCH /stage`/delete + plan checklist + activity feed; proposal authoring nested routes `/narrative`, `/budget`, `/reviews`, `/submissions`. Migrations `0036`–`0038`. Membership-only |
 | Compliance | `/api/compliance` | Requirements, documents, health score |
 | Documents | `/api/documents` | List, upload (presigned S3), download, folder management, versioning |
 | Orders | `/api/orders` | CRUD, line items, delivery milestones |
@@ -236,6 +238,7 @@ Key table groups:
 | Enterprise SSO | `org_sso_domains` + `organizations.entra_tenant_id`/`sso_default_role` + `oauth_accounts.tenant_id` (migration `0032`) |
 | Procurement | `tenders`, `saved_tenders`, `tender_documents`, `tender_analysis` |
 | Bids | `bids`, `bid_activities`, `bid_checklists`, `bid_comments` |
+| Grant lifecycle | `saved_grants` (`0035`); `grant_applications` + `grant_application_activities` + `grant_application_checklist_items` (`0036`, generated `status_category`); `grant_narrative_sections` + `grant_budget_line_items` (`0037`); `grant_reviews` + `grant_submissions` (`0038`). Org-scoped; the grants analog of the bids tables |
 | Compliance | `compliance_requirements`, `compliance_documents` |
 | Documents | `documents`, `document_versions`, `document_folders` |
 | Fulfillment | `orders`, `order_items`, `order_milestones` |

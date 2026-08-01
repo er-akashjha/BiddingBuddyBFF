@@ -122,6 +122,9 @@ public static class InfrastructureServiceExtensions
         // Same concrete client as IBiddingBuddyServicesClient so both share one cached JWT.
         services.AddScoped<IGrantServicesClient>(sp =>
             (BiddingBuddyServicesClient)sp.GetRequiredService<IBiddingBuddyServicesClient>());
+        // Grant pursuit lifecycle (org-scoped): saved grants + applications + proposal authoring.
+        services.AddScoped<ISavedGrantService, SavedGrantService>();
+        services.AddScoped<IGrantApplicationService, GrantApplicationService>();
 
         // Deadline / expiry reminder scan (bids, invoices, compliance, delivery, EMD)
         services.AddScoped<INotificationAudienceResolver, NotificationAudienceResolver>();
