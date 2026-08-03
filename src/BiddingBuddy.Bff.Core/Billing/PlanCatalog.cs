@@ -64,10 +64,13 @@ public static class PlanCatalog
             Tagline: "Search every tender, taste the AI",
             Bullets: new[]
             {
-                "Search & browse all tenders",
-                "3 AI tender summaries / month",
-                "Weekly email alerts",
-                "1 saved filter · 1 user",
+                "Search & browse every GeM, eProcure and Coal India tender",
+                "Full tender detail, documents and PDF downloads",
+                "Bid pipeline with deadline tracking",
+                "Document vault & EMD register",
+                "3 AI tender summaries a month",
+                "Weekly email alerts on 1 saved interest",
+                "1 user",
             }),
 
         new PlanDefinition(Starter, "Starter",
@@ -79,10 +82,12 @@ public static class PlanCatalog
             Tagline: "For the solo MSME owner",
             Bullets: new[]
             {
-                "Daily tender alerts",
-                "30 AI tender summaries / month",
-                "Basic bid tracker",
-                "Unlimited saved filters · 1 user",
+                "Everything in Free, plus:",
+                "Daily alerts instead of weekly",
+                "30 AI tender summaries a month — 10× Free",
+                "Unlimited saved interests & filters",
+                "Email support",
+                "1 user",
             }),
 
         new PlanDefinition(Growth, "Growth",
@@ -94,10 +99,14 @@ public static class PlanCatalog
             Tagline: "For small bidding teams",
             Bullets: new[]
             {
-                "Real-time tender alerts",
-                "300 AI summaries / month + eligibility check",
-                "Full bid management (roles, subtasks)",
-                "Competitor & result history · 5 users",
+                "Everything in Starter, plus:",
+                "Real-time alerts the moment a tender is published",
+                "300 AI summaries a month",
+                "AI eligibility check — \"can we actually bid?\"",
+                "Competitor intelligence & win/loss history",
+                "Award results & price-to-win ladders",
+                "5 users",
+                "Priority support",
             }),
 
         new PlanDefinition(Pro, "Pro",
@@ -109,10 +118,11 @@ public static class PlanCatalog
             Tagline: "For consultants & active contractors",
             Bullets: new[]
             {
-                "Unlimited AI usage (fair use)",
-                "Workflow automation",
-                "Priority support",
-                "Everything in Growth · 15 users",
+                "Everything in Growth, plus:",
+                "Unlimited AI summaries & eligibility checks (fair use)",
+                "15 users",
+                "Dedicated account manager",
+                "Onboarding & bid-strategy session",
             }),
     };
 

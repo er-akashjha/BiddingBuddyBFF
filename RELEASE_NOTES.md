@@ -1,10 +1,38 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v45**
+Current version: **v46**
 
 ---
 
-## v45 — 2026-08-03 01:16 IST
+## v46 — 2026-08-03 10:34 IST
+
+**Let people choose the Free plan, and stop the pricing page advertising things the
+product does not do.** Follows v45; no schema change.
+
+`CreateOrgDto` gains an optional `StartPlan`. Omitted (every existing caller) still means
+the 14-day Growth trial. `"free"` creates a Free workspace outright — someone who picked
+Free on the pricing page was previously given a trial anyway and had to sit out 14 days to
+reach the plan they actually asked for.
+
+The rule now lives in `Core/Billing/SubscriptionSeedPolicy.cs` as a pure function, because
+the seeding itself is raw SQL that the in-memory test provider cannot execute — so the
+invariant that matters would otherwise have shipped untested. **Only `"free"` is honoured;
+every other value falls back to the trial rather than erroring**, which is what stops a
+client self-assigning Pro by posting `startPlan: "pro"`. 13 new tests cover it, including
+the paid-code and injection-shaped cases (459 total, green).
+
+The free path writes a real `org_subscriptions` row rather than leaving the org row-less.
+Both resolve to identical entitlements today, but only a row distinguishes "chose Free"
+from "trial seeding failed" — the difference between leaving someone alone and owing them
+a trial.
+
+**Plan bullets rewritten against what is actually enforced.** The catalog was advertising
+workflow automation (its page redirects to the dashboard), Excel export (does not exist),
+and listing the bid tracker and document vault as paid upgrades when both are available on
+every plan including Free. Only six things are genuinely gated — AI quota, alert cadence,
+saved-filter cap, seats, competitor/result history, and the eligibility check — so the
+bullets now describe those, cumulatively ("Everything in Starter, plus:"), with shared
+capabilities listed under Free where they truly begin.
 
 **Subscription billing — plans, Razorpay checkout, promo codes, AI quotas, seat limits.** Migration
 `0039`. The BFF had no plan/tier concept at all; this is the greenfield commercial layer.
