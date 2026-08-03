@@ -34,6 +34,7 @@ public sealed class GemSellerIdentityUpdateTests
             Mock.Of<IUserRepository>(),
             Mock.Of<INotificationPublisher>(),
             new TenderAlertRuleService(db),
+            new TestSupport.StubPlanService(),
             new ConfigurationBuilder().Build(),
             NullLogger<OrganizationService>.Instance);
 

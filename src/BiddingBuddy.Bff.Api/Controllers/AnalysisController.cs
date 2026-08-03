@@ -1,3 +1,4 @@
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.Analysis;
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Interfaces;
@@ -10,17 +11,49 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Route("api/analysis")]
 [Authorize]
 [Produces("application/json")]
-public class AnalysisController(IAnalysisService analysisService) : BffControllerBase
+public class AnalysisController(
+    IAnalysisService analysisService,
+    IAiQuotaService aiQuota,
+    IPlanService planService) : BffControllerBase
 {
-    /// <summary>Get AI analysis result for a specific tender (eligibility, risk, win strategy, bid range).</summary>
+    /// <summary>
+    /// Get AI analysis result for a specific tender (eligibility, risk, win strategy, bid range).
+    /// This is the deliberate "view AI" action — it consumes one monthly AI credit the FIRST time
+    /// an org opens a given tender's analysis in an IST calendar month (re-views are free; the
+    /// tender-detail unlock shares the same key, so this never double-charges). Quota exhausted →
+    /// 403 UPGRADE_REQUIRED. Returns 200 with a null <c>analysis</c> when the credit was consumed
+    /// but no extended analysis row exists — the unlock still reveals the tender's AI fields.
+    /// </summary>
     [HttpGet("tenders/{tenderId:guid}")]
-    [ProducesResponseType(typeof(AiAnalysisResultDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(TenderAnalysisResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetTenderAnalysis(Guid tenderId, CancellationToken ct)
     {
+        var verdict = await aiQuota.TryConsumeAsync(
+            CurrentOrgId, CurrentUserId, PlanFeatures.AiSummary, tenderId.ToString(), ct);
+        if (!verdict.Allowed)
+        {
+            var plan = await planService.GetPlanForAsync(CurrentOrgId, ct);
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error        = "You've used all AI summaries included in your plan this month.",
+                code         = "UPGRADE_REQUIRED",
+                feature      = PlanFeatures.AiSummary,
+                requiredPlan = PlanCatalog.NextPlanUp(plan.PlanCode),
+                currentPlan  = plan.PlanCode,
+                used         = verdict.Used,
+                quota        = verdict.Quota,
+            });
+        }
+
         var analysis = await analysisService.GetTenderAnalysisAsync(tenderId, CurrentOrgId, ct);
-        if (analysis is null) return NotFound(new { error = "No AI analysis available for this tender." });
-        return Ok(analysis);
+
+        // The eligibility verdict is a Growth+ feature even once unlocked.
+        var effective = await planService.GetPlanForAsync(CurrentOrgId, ct);
+        if (analysis is not null && !effective.HasFeature(PlanFeatures.EligibilityCheck))
+            analysis = analysis with { EligibilityBreakdown = null };
+
+        return Ok(new TenderAnalysisResponseDto(analysis, new AiUsageDto(verdict.Used, verdict.Quota)));
     }
 
     /// <summary>Get monthly performance snapshots for the org (win rate, bid values, top categories).</summary>

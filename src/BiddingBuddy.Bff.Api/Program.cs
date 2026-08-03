@@ -64,6 +64,10 @@ builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.DeadlineScanWorke
 // Weekly org-summary digest (open bids, due-this-week, overdue, won) → owners + admins.
 builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.WeeklyDigestWorker>();
 
+// Subscription lifecycle — trial-ending nudges, renewal reminders, status transitions.
+// Entitlements are date-resolved in PlanService, so this only sends email + relabels.
+builder.Services.AddHostedService<BiddingBuddy.Bff.Api.Workers.SubscriptionLifecycleWorker>();
+
 // ── JWT Authentication ────────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is not configured.");

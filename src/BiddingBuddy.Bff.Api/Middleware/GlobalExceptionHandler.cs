@@ -9,6 +9,30 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
     public async ValueTask<bool> TryHandleAsync(
         HttpContext ctx, Exception ex, CancellationToken ct)
     {
+        // Plan-limit refusals keep their machine-readable body: the SPA branches on
+        // `code` (upgrade prompt, seat warning) and must not receive a bare ProblemDetails
+        // that reads like a permissions failure. Same body shape as RequirePlanFeature.
+        if (ex is PlanLimitException plan)
+        {
+            logger.LogWarning("Plan limit refused request → {Code} {Feature}: {Detail}",
+                plan.Code, plan.Feature, plan.Message);
+
+            if (ctx.Response.HasStarted) return false;
+
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                error        = plan.Message,
+                code         = plan.Code,
+                feature      = plan.Feature,
+                requiredPlan = plan.RequiredPlan,
+                currentPlan  = plan.CurrentPlan,
+                used         = plan.Used,
+                limit        = plan.Limit,
+            }, CancellationToken.None);
+            return true;
+        }
+
         var (status, title) = ex switch
         {
             KeyNotFoundException        => (StatusCodes.Status404NotFound,    "Not Found"),

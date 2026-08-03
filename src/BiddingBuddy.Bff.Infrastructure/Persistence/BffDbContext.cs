@@ -114,6 +114,17 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     // Integrations
     public DbSet<GemIntegration> GemIntegrations => Set<GemIntegration>();
 
+    // SaaS subscription billing (migration 0039). Deliberately named billing_* /
+    // org_subscriptions — Orders/Invoices/EmdPayments above are the TENDER domain
+    // (money the org bills government buyers), not our subscription revenue.
+    public DbSet<OrgSubscription> OrgSubscriptions => Set<OrgSubscription>();
+    public DbSet<BillingPayment> BillingPayments => Set<BillingPayment>();
+    public DbSet<BillingWebhookEvent> BillingWebhookEvents => Set<BillingWebhookEvent>();
+    public DbSet<AiUsageRecord> AiUsageRecords => Set<AiUsageRecord>();
+    public DbSet<OrgEntitlementOverride> OrgEntitlementOverrides => Set<OrgEntitlementOverride>();
+    public DbSet<PromoCode> PromoCodes => Set<PromoCode>();
+    public DbSet<PromoRedemption> PromoRedemptions => Set<PromoRedemption>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

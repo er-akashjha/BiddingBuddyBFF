@@ -33,6 +33,7 @@ public sealed class OrgJoinRequestTests
     private static JoinRequestService Service(BffDbContext db) =>
         new(db,
             Mock.Of<INotificationPublisher>(),
+            new TestSupport.StubPlanService(),
             new ConfigurationBuilder().Build(),
             NullLogger<JoinRequestService>.Instance);
 

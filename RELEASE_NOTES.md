@@ -1,8 +1,77 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v44**
+Current version: **v45**
 
 ---
+
+## v45 — 2026-08-03 01:16 IST
+
+**Subscription billing — plans, Razorpay checkout, promo codes, AI quotas, seat limits.** Migration
+`0039`. The BFF had no plan/tier concept at all; this is the greenfield commercial layer.
+
+- **Schema** (`0039_add_billing.sql`, idempotent) — `org_subscriptions` (one row per org, unique),
+  `billing_payments` (**unique `razorpay_order_id`** — the lock activation serializes on),
+  `billing_webhook_events` (event dedup), `promo_codes` + `promo_redemptions` (**unique
+  `(promo_id, org_id)`** = one use per org), `ai_usage_records` (**unique
+  `(org_id, feature, resource_id, period_month)`** — the constraint *is* the consume operation),
+  `org_entitlement_overrides`. Seeds `PAYMENT_RECEIPT` / `TRIAL_ENDING` / `RENEWAL_REMINDER` /
+  `PAYMENT_FAILED` templates (Email + InApp) and the inactive `FOUNDING40` code. **Backfills every
+  existing org onto a 14-day Growth trial** — dropping them to Free on deploy day would be a silent
+  feature regression. Named `billing_*` throughout to avoid the tender-domain `orders`/`invoices`/
+  `emd_payments` (money the org bills government buyers).
+- **Catalog is code** — `Core/Billing/PlanCatalog.cs` (Free / Starter ₹2,999 / Growth ₹11,999 /
+  Pro ₹29,999 annual, paise), modelled on `OrgRoles.cs`: gates compile against `PlanFeatures.*`
+  constants, and `GET /api/public/plans` serialises the same catalog, so advertised prices and
+  enforced limits cannot drift.
+- **Resolution is DATE-driven** — `Core/Billing/PlanResolution.cs` recomputes the effective plan from
+  `trial_ends_at` / `current_period_end` (+7-day grace) on every read. **A stalled lifecycle worker can
+  never extend paid access**; `status` is only a label. Shared by `PlanService` (gates) and
+  `AuthService` (`/me`) so the two can't disagree.
+- **Gates** — new `RequirePlanFeatureAttribute` (clone of `RequireOrgCapabilityAttribute`) →
+  `403 { code: "UPGRADE_REQUIRED", feature, requiredPlan, currentPlan }`, distinguishable from the
+  membership and role 403s. Applied to `CompetitorsController` and `GET /api/tenders/{id}/result`.
+  New `PlanLimitException` carries the same body shape from inside services (`GlobalExceptionHandler`
+  serialises it) for saved-filter caps and seat limits (`SEAT_LIMIT_REACHED` — pending invites reserve
+  a seat, re-checked at accept). Alert cadence is floored **at read time** in `MatchingService`, so a
+  downgrade never rewrites the org's stored preference. New `billing.manage` capability (owner+admin).
+- **AI metering** — `AiQuotaService`, IST calendar month. Quota is consumed only by the deliberate
+  unlock (`GET /api/analysis/tenders/{id}`, or `GET /api/tenders/{id}?unlockAi=true`), never by
+  browsing; **re-viewing an unlocked tender is free** (same usage key across both endpoints, so neither
+  double-charges). Tender detail masks `AiSummary`/`AiAnalysis`/risk/eligibility with `aiLocked: true`
+  until unlocked — `AiScore` stays as the teaser on every plan. Unlimited plans auto-unlock on view but
+  still record usage for fair-use monitoring.
+- **Razorpay** — typed `HttpClient` (no SDK), one-time annual orders, **no autopay mandates** (v2).
+  `RazorpaySignature` verifies both the checkout callback (`order|payment`) and the webhook (raw body)
+  with `FixedTimeEquals`. `ActivateFromPaymentAsync` is the single idempotent activator shared by the
+  browser callback and the webhook: `SELECT … FOR UPDATE` on the payment row, already-captured = no-op,
+  so the race between them is a non-event. Verify also asserts the order belongs to the calling org —
+  a valid signature proves the payment is real, not who may claim it.
+- **Promo codes** — `PromoService`; **all discount math server-side**, the client only displays figures
+  it produced. Percent or flat, plan restrictions, validity window, redemption cap, one use per org
+  (`INVALID_CODE` / `EXPIRED` / `EXHAUSTED` / `NOT_APPLICABLE` / `ALREADY_USED`). `is_lifetime`
+  re-applies automatically on every later checkout — that's the "founding member 40% off for life"
+  mechanism, with no autopay needed. A too-large flat discount clamps to a ₹1 floor (Razorpay rejects
+  ₹0 orders). Admin CRUD at `/internal/promo-codes` (X-Api-Key); discount type/value are immutable
+  after creation so a lifetime holder's price can't be rewritten under them.
+- **Endpoints** — `BillingController` (`GET summary` any member; `POST promo/validate`, `POST checkout`,
+  `POST verify`, `GET payments` behind `billing.manage`), `PublicPlansController`,
+  `RazorpayWebhookController` (`/api/webhooks/razorpay`, added to the `OrgContextMiddleware` skip list;
+  **fails closed with 503 when `WebhookSecret` is unset** — deliberately *not* `[PipelineApiKey]`, which
+  allows requests when unconfigured), `InternalPromoCodesController`.
+- **Trial + lifecycle** — `OrganizationService.CreateAsync` starts the 14-day Growth trial (caught and
+  logged, never fatal — no row resolves to Free). New `SubscriptionLifecycleWorker` +
+  `SubscriptionLifecycleService`: trial-ending T-3, renewal T-14/T-3, `past_due` at period end,
+  `expired` after grace. Every email deduped by its own stamp column, reset on renewal.
+- **`/me`** — `UserOrgDto` gains `PlanCode` / `PlanStatus` / `TrialEndsAt` / `PlanPeriodEnd`, appended
+  and defaulted exactly as `OrgType` was, so older clients keep working.
+- **Config** — new `Razorpay` (`KeyId` public; `KeySecret` + `WebhookSecret` via user-secrets/env) and
+  `SubscriptionLifecycle` sections. **Unconfigured Razorpay degrades gracefully**: checkout returns 503
+  `CHECKOUT_UNAVAILABLE` and the UI shows "Contact us" — the account is a go-live prerequisite like
+  DNS/OAuth, not a build dependency.
+- **Tests** — 32 new (446 total, all green): plan resolution incl. the expired-trial-still-labelled-
+  trialing case and fail-closed unknown statuses, catalog prices pinned against the published page,
+  promo validation/discount math/lifetime auto-apply/loud failure on a stale code, and signature
+  verification incl. tampered bodies, wrong secrets, empty secrets and malformed hex.
 
 ## v44 — 2026-08-01 19:49 IST
 

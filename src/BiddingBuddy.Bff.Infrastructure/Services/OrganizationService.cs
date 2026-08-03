@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.Alerts;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
@@ -18,6 +19,7 @@ public class OrganizationService(
     IUserRepository userRepo,
     INotificationPublisher notifications,
     ITenderAlertRuleService alertRules,
+    IPlanService planService,
     IConfiguration config,
     ILogger<OrganizationService> log) : IOrganizationService
 {
@@ -78,8 +80,33 @@ public class OrganizationService(
         await db.SaveChangesAsync(ct);
 
         await SeedStarterAlertRuleAsync(org.Id, ownerId, org.PrimaryCategory, ct);
+        await StartTrialAsync(org.Id, ct);
 
         return await GetAsync(org.Id, ownerId, ct);
+    }
+
+    /// <summary>
+    /// Every new workspace starts on the 14-day Growth trial the marketing site already
+    /// promises ("14-day trial · No credit card required").
+    ///
+    /// Failure is caught and logged, never fatal: an org with no subscription row resolves
+    /// to the free plan (PlanResolution), so the workspace works either way — losing the
+    /// trial is a support ticket, failing signup is a lost customer.
+    /// </summary>
+    private async Task StartTrialAsync(Guid orgId, CancellationToken ct)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            await db.Database.ExecuteSqlInterpolatedAsync($@"
+                INSERT INTO org_subscriptions (org_id, plan_code, status, trial_ends_at)
+                VALUES ({orgId}, {PlanCatalog.Growth}, 'trialing', {now.AddDays(14)})
+                ON CONFLICT (org_id) DO NOTHING", ct);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Could not start the trial subscription for org {OrgId}; it defaults to the free plan.", orgId);
+        }
     }
 
     /// <summary>
@@ -344,6 +371,11 @@ public class OrganizationService(
                 throw new InvalidOperationException("ALREADY_MEMBER");
         }
 
+        // Seat gate: an outstanding invite reserves a seat, so count pending invites
+        // alongside active members — otherwise five invites sent on a 5-seat plan all
+        // land. Re-checked at accept time in case the plan shrank in between.
+        await EnsureSeatAvailableAsync(orgId, countPendingInvites: true, ct);
+
         // Membership is never granted at invite time. Both cases below create a
         // pending invite; the invitee becomes a member only when they explicitly
         // confirm — existing users via the SPA accept page (POST /api/invites/accept),
@@ -464,6 +496,12 @@ public class OrganizationService(
         var member = await db.OrgMembers
             .FirstOrDefaultAsync(m => m.OrgId == invite.OrgId && m.UserId == userId, ct);
 
+        // Re-check the seat cap (invite-time counted it, but the plan may have shrunk —
+        // trial expiry, downgrade — between invite and accept). Already-active members
+        // pass through: accepting changes their role, not the seat count.
+        if (member is null || member.Status != "active")
+            await EnsureSeatAvailableAsync(invite.OrgId, countPendingInvites: false, ct);
+
         if (member is null)
         {
             db.OrgMembers.Add(new OrgMember
@@ -507,6 +545,31 @@ public class OrganizationService(
         // is what matters: it can't be redeemed and drops off the org's pending list.
         invite.AcceptedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Throws <see cref="PlanLimitException"/> (403 SEAT_LIMIT_REACHED) when the org has no free
+    /// seat. Existing members always keep working after a downgrade — only ADDING is gated.
+    /// </summary>
+    private async Task EnsureSeatAvailableAsync(Guid orgId, bool countPendingInvites, CancellationToken ct)
+    {
+        var plan = await planService.GetPlanForAsync(orgId, ct);
+
+        var used = await db.OrgMembers.CountAsync(m => m.OrgId == orgId && m.Status == "active", ct);
+        if (countPendingInvites)
+        {
+            var now = DateTime.UtcNow;
+            used += await db.OrganizationInvites
+                .CountAsync(i => i.OrgId == orgId && i.AcceptedAt == null && i.ExpiresAt > now, ct);
+        }
+
+        if (used >= plan.SeatCap)
+            throw new PlanLimitException(PlanLimitException.SeatLimitReached,
+                $"Your plan includes {plan.SeatCap} seat{(plan.SeatCap == 1 ? "" : "s")} and all are in use. Upgrade to add more team members.",
+                PlanFeatures.Seats,
+                requiredPlan: PlanCatalog.NextPlanUp(plan.PlanCode),
+                currentPlan: plan.PlanCode,
+                used: used, limit: plan.SeatCap);
     }
 
     /// <summary>Token → live invite row, or <c>INVITE_INVALID</c> for unknown/consumed/expired.</summary>

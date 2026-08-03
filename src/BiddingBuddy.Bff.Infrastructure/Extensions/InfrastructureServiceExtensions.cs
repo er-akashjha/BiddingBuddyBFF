@@ -137,6 +137,18 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IWeeklyDigestService, WeeklyDigestService>();
         services.Configure<WeeklyDigestOptions>(config.GetSection(WeeklyDigestOptions.Section));
 
+        // ── Subscription billing ─────────────────────────────────────────────
+        services.AddScoped<IPlanService, PlanService>();
+        services.AddScoped<IAiQuotaService, AiQuotaService>();
+        services.Configure<RazorpayOptions>(config.GetSection(RazorpayOptions.Section));
+        services.AddHttpClient<IRazorpayClient, RazorpayClient>()
+            .AddHttpMessageHandler<Logging.CorrelationHeaderHandler>();
+        services.AddScoped<IPromoService, PromoService>();
+        services.AddScoped<IBillingService, BillingService>();
+        services.AddScoped<ISubscriptionLifecycleService, SubscriptionLifecycleService>();
+        services.Configure<SubscriptionLifecycleOptions>(
+            config.GetSection(SubscriptionLifecycleOptions.Section));
+
         // Schema migrator (runs embedded SQL scripts via /internal/migrations)
         services.AddScoped<IDbMigrator, DbMigrator>();
 

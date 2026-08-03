@@ -40,5 +40,17 @@ public record UserOrgDto(
     /// 0031, degrades to today's behaviour rather than exposing a department's tooling to every
     /// supplier.</para>
     /// </summary>
-    string OrgType = "supplier"
+    string OrgType = "supplier",
+
+    /// <summary>
+    /// The DATE-RESOLVED plan in force (PlanResolution over org_subscriptions), not the raw row —
+    /// an expired trial reads as <c>free</c> here even before the lifecycle worker flips the label.
+    /// Carried on /me (like OrgType) so the SPA can gate its surface without a second round-trip;
+    /// the server re-checks on every gated endpoint regardless. Defaults keep older constructions
+    /// compiling and degrade an org without a subscription row to free.
+    /// </summary>
+    string PlanCode = "free",
+    string PlanStatus = "active",
+    DateTime? TrialEndsAt = null,
+    DateTime? PlanPeriodEnd = null
 );
