@@ -54,15 +54,20 @@ public class TokenService(IConfiguration config) : ITokenService
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
+        // The nonce doubles as the OIDC anti-replay nonce for providers whose id_token we validate
+        // (Microsoft). Honour a caller-supplied one so the value echoed to the provider and the value
+        // sealed in the state are provably the same string; generate when absent, as before.
         var claims = new List<Claim>
         {
             new("return_url", data.ReturnUrl),
-            new("nonce", Guid.NewGuid().ToString()),
+            new("nonce", data.Nonce ?? Guid.NewGuid().ToString()),
         };
         // Mobile-only claims — absent for web flows, so the callback can tell them apart.
         if (data.Client is not null) claims.Add(new Claim("client", data.Client));
         if (data.CodeChallenge is not null) claims.Add(new Claim("code_challenge", data.CodeChallenge));
         if (data.RedirectUri is not null) claims.Add(new Claim("redirect_uri", data.RedirectUri));
+        // Web-only: the allowlisted origin the sign-in began on, so the callback returns there.
+        if (data.Origin is not null) claims.Add(new Claim("origin", data.Origin));
 
         var token = new JwtSecurityToken(
             issuer: _issuer,
@@ -96,7 +101,9 @@ public class TokenService(IConfiguration config) : ITokenService
                 principal.FindFirst("return_url")?.Value ?? "/",
                 principal.FindFirst("client")?.Value,
                 principal.FindFirst("code_challenge")?.Value,
-                principal.FindFirst("redirect_uri")?.Value);
+                principal.FindFirst("redirect_uri")?.Value,
+                principal.FindFirst("nonce")?.Value,
+                principal.FindFirst("origin")?.Value);
             return true;
         }
         catch

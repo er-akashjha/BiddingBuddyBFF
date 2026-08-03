@@ -18,6 +18,7 @@ public class OAuthAccountConfiguration : IEntityTypeConfiguration<OAuthAccount>
         b.Property(x => x.AccessToken).HasColumnName("access_token");
         b.Property(x => x.RefreshToken).HasColumnName("refresh_token");
         b.Property(x => x.TokenExpiresAt).HasColumnName("token_expires_at");
+        b.Property(x => x.TenantId).HasColumnName("tenant_id");
         b.Property(x => x.RawProfile).HasColumnName("raw_profile").HasColumnType("jsonb");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");

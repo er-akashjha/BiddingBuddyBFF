@@ -38,6 +38,18 @@ public interface IOrganizationService
 
     /// <summary>Revoke a pending invite (sets <c>accepted_at = now</c> so the token can no longer be redeemed).</summary>
     Task RevokePendingInviteAsync(Guid orgId, Guid inviteId, Guid requestingUserId, CancellationToken ct = default);
+    /// <summary>
+    /// Operator-only: grant or revoke buyer status and record the procuring-entity identity.
+    /// Null when the organization does not exist.
+    /// </summary>
+    /// <remarks>
+    /// There is no user-facing equivalent, and that is the design: a buyer org publishes notices on
+    /// the public portal under a department's name, so the claim is provisioned after offline
+    /// verification rather than self-asserted. Writes an <c>audit_events</c> row.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The org type or entity type is not a permitted value.</exception>
+    Task<OrgTypeResultDto?> SetOrgTypeAsync(Guid orgId, SetOrgTypeDto dto, CancellationToken ct = default);
+
     Task<OrgMemberDto> UpdateMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, UpdateMemberDto dto, CancellationToken ct = default);
     Task RemoveMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, CancellationToken ct = default);
 

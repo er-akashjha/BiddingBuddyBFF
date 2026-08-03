@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BiddingBuddy.Bff.Core.DTOs.Alerts;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
@@ -532,6 +533,73 @@ public class OrganizationService(
             ?? throw new KeyNotFoundException("User not found.");
         if (!string.Equals(user.Email, invite.Email, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("INVITE_EMAIL_MISMATCH");
+    }
+
+    /// <summary>Permitted <c>org_type</c> values — mirrors the CHECK added by migration 0031.</summary>
+    private static readonly HashSet<string> OrgTypes =
+        new(["supplier", "buyer", "both"], StringComparer.Ordinal);
+
+    /// <summary>Permitted <c>entity_type</c> values — mirrors the CHECK added by migration 0031.</summary>
+    private static readonly HashSet<string> EntityTypes =
+        new(["central", "state", "psu", "ulb", "autonomous", "cooperative", "trust", "private"],
+            StringComparer.Ordinal);
+
+    public async Task<OrgTypeResultDto?> SetOrgTypeAsync(
+        Guid orgId, SetOrgTypeDto dto, CancellationToken ct = default)
+    {
+        // Validated here rather than left to the database. A CHECK violation surfaces as a 500 with a
+        // constraint name in it; an operator provisioning a department deserves to be told which
+        // value was wrong and what the alternatives are.
+        if (!OrgTypes.Contains(dto.OrgType))
+            throw new ArgumentException(
+                $"orgType must be one of: {string.Join(", ", OrgTypes)}. Got '{dto.OrgType}'.");
+
+        if (dto.EntityType is not null && !EntityTypes.Contains(dto.EntityType))
+            throw new ArgumentException(
+                $"entityType must be one of: {string.Join(", ", EntityTypes)}. Got '{dto.EntityType}'.");
+
+        var org = await db.Organizations.FirstOrDefaultAsync(o => o.Id == orgId, ct);
+        if (org is null) return null;
+
+        var previous = org.OrgType;
+
+        org.OrgType = dto.OrgType;
+        if (dto.EntityType is not null) org.EntityType = dto.EntityType;
+        if (dto.Ministry is not null) org.Ministry = dto.Ministry;
+        if (dto.Department is not null) org.Department = dto.Department;
+        if (dto.Office is not null) org.Office = dto.Office;
+        if (dto.ProcuringEntityCode is not null) org.ProcuringEntityCode = dto.ProcuringEntityCode;
+
+        // Recorded against the ORGANIZATION, not a tender: this predates any tender existing, and
+        // "who made this a buyer, and on what evidence" is the first question asked after a notice
+        // is published under a name that turns out to be wrong. ActorId is null because the caller
+        // is an API key, not a user — which the audit row should say plainly rather than attribute
+        // to whichever human happened to hold the key.
+        db.AuditEvents.Add(new AuditEvent
+        {
+            OrgId = orgId,
+            EntityType = "organization",
+            EntityId = orgId,
+            Action = previous == dto.OrgType ? "org_type_reaffirmed" : "org_type_changed",
+            ActorId = null,
+            ActorName = "operator (internal API key)",
+            ActorRole = "operator",
+            Changes = JsonSerializer.Serialize(new[]
+            {
+                new { field = "orgType", label = "Organization type", oldValue = previous, newValue = dto.OrgType },
+                new { field = "verification", label = "Verification note", oldValue = (string?)null, newValue = dto.VerificationNote },
+            }),
+        });
+
+        await db.SaveChangesAsync(ct);
+
+        log.LogWarning(
+            "Organization {OrgId} ({Name}) org_type {Previous} → {New} by internal API key. Verification: {Note}",
+            orgId, org.Name, previous, dto.OrgType, dto.VerificationNote ?? "(none recorded)");
+
+        return new OrgTypeResultDto(
+            org.Id, org.Name, previous, org.OrgType,
+            org.EntityType, org.Ministry, org.Department, org.Office, org.ProcuringEntityCode);
     }
 
     public async Task<OrgMemberDto> UpdateMemberAsync(Guid orgId, Guid memberId, Guid requestingUserId, UpdateMemberDto dto, CancellationToken ct = default)

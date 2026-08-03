@@ -15,11 +15,14 @@ BiddingBuddyBFF/
     │   ├── Program.cs                DI wiring, middleware pipeline
     │   ├── Controllers/              Controllers (org-scoped + /internal/*)
     │   ├── Filters/PipelineApiKeyAttribute.cs  X-Api-Key gate for /internal/*
+    │   ├── Filters/RequireOrgCapabilityAttribute.cs  Role → capability gate (buyer routes only)
     │   ├── Middleware/OrgContextMiddleware.cs  X-Org-Id header + org-membership check
     │   └── appsettings.json
     ├── BiddingBuddy.Bff.Core/        Domain layer (no infra deps)
     │   ├── Entities/                 EF Core entity classes
     │   ├── DTOs/                     Request/response DTOs per feature
+    │   ├── Authorization/OrgRoles.cs Role vocabulary + the capability map
+    │   ├── Compliance/               Buyer-tender rules engine + the version hash chain
     │   ├── Options/                  Strongly-typed config (R2Options, RabbitMqOptions, …)
     │   └── Interfaces/               Service + repository contracts only
     └── BiddingBuddy.Bff.Infrastructure/  Data + external services
@@ -72,10 +75,11 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 ### Public (no auth)
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/auth/oauth/{provider}` | Initiate OAuth (Google/Facebook/GitHub) |
+| GET | `/api/auth/oauth/{provider}` | Initiate OAuth (Google/Microsoft/Facebook/GitHub). Optional `login_hint` pre-selects the account in the provider's picker — cosmetic, never read back as identity |
 | GET | `/api/auth/oauth/{provider}/callback` | OAuth code exchange |
 | POST | `/api/auth/refresh` | Rotate refresh → new access + refresh token |
 | GET | `/api/auth/providers` | List enabled OAuth providers (`OAuth:{Provider}:Enabled` flags, default true; disabled providers also 400 on initiation) |
+| GET | `/api/auth/sso/lookup?email=` | Which IdP owns this email's domain → `{provider}`. Always 200; carries the provider and **nothing else** (see Enterprise SSO below) |
 | GET | `/api/invites/preview?token=` | Invite details for the SPA accept page (token = credential) |
 
 ### Authenticated (Bearer JWT + `X-Org-Id` header required for org-scoped routes)
@@ -86,6 +90,8 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | Invites | `/api/invites` | `POST /accept`, `POST /decline` (JWT, **no X-Org-Id** — exempt from org middleware since the caller isn't a member yet). Accept validates the logged-in email matches the invited email, then creates/reactivates the membership |
 | Tenders | `/api/tenders` | List/filter, `GET /paged` (paginated wrapper over BiddingBuddyServices), get detail, save, track, documents, AI analysis |
 | Bids | `/api/bids` | List, create, update, stage progression (7 stages), activities, **comments**, checklist, `GET /by-tender?tenderIds=` (batched already-in-pipeline lookup for tender list/detail) |
+| Saved grants | `/api/saved-grants` | Save/track grant opportunities (org-scoped snapshot keyed by `mongo_grant_id`): list, ids, upsert, delete. Migration `0035` |
+| Grant applications | `/api/grant-applications` | **Grant pursuit lifecycle** (grants analog of bids): list/get/create/update/`PATCH /stage`/delete + plan checklist + activity feed; proposal authoring nested routes `/narrative`, `/budget`, `/reviews`, `/submissions`. Migrations `0036`–`0038`. Membership-only |
 | Compliance | `/api/compliance` | Requirements, documents, health score |
 | Documents | `/api/documents` | List, upload (presigned S3), download, folder management, versioning |
 | Orders | `/api/orders` | CRUD, line items, delivery milestones |
@@ -95,6 +101,7 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | Notifications | `/api/notifications` | In-app inbox: list, mark read, channel preferences (backed by `user_notifications` since the rename — see Notification subsystem below) |
 | Integrations | `/api/integrations` | GeM portal config, sync trigger, sync status |
 | Tender alert rules | `/api/tender-alert-rules` | Client "interests" CRUD + `/settings` (digest size, channels, roles) — see Tender-match digests below |
+| **Buyer tenders** | `/api/buyer/tenders` | **Buyer-side tendering** — a department authors and publishes a tender notice. Draft CRUD, `/validate`, `/publish`, `/corrigenda`, `/award`, `/cancel`, `/committee`, `/audit-file`. **The only capability-gated controller in this API** — see Authorization below |
 
 ### Internal (API-key only — `X-Api-Key` header, bypasses org middleware)
 | Method | Path | Purpose |
@@ -142,11 +149,76 @@ Frontend /auth/callback?access_token=...&refresh_token=...
 Applied to all routes except `/api/auth/*`, `/api/public/*`, `/api/invites/*`, `/internal/*`, `/swagger`, `/health`, `/sitemap`:
 1. Reads `X-Org-Id` header → validates UUID
 2. Extracts `sub` claim from JWT
-3. Checks `organization_members` table — 403 if not a member
+3. Checks `org_members` table — 403 if not a member
 4. Sets `HttpContext.Items["OrgId"]` for downstream controllers
 
+### Enterprise SSO (Microsoft Entra ID) — migration `0032`
+
+An organization binds itself to its Entra directory; anyone signing in from that directory joins
+automatically, with no invite (`0003`) and no join request (`0030`).
+
+> **The invariant: membership is granted by the `tid` claim of a signature-verified Entra
+> `id_token`. NEVER by an email domain.**
+
+`org_sso_domains` is **routing only** — it decides which sign-in button to press for an address. A
+wrong routing decision is harmless: the user goes to Microsoft, Microsoft says who they are, and a
+non-matching `tid` joins nothing. Rows are written by the server from tenant-matched sign-ins, never
+typed by a customer, which is what lets routing skip a DNS-verification flow of our own — **Entra
+already forces a DNS TXT proof before a tenant may claim a custom domain.**
+
+**Binding is by proof.** `POST /api/organizations/{id}/sso/entra` ignores any tenant id in the body
+and reads the caller's own `oauth_accounts.tenant_id`. A tenant id is publicly discoverable, so a
+form that accepted one would be a way to claim a competitor's directory. Owner/admin is necessary but
+not sufficient.
+
+**Provider notes** (`MicrosoftTokenVerifier`, `OAuthProviderService`):
+- Authority `…/organizations` = work/school accounts only. The MSA consumer tenant is *also* rejected
+  explicitly, so the product rule doesn't rest on one config string.
+- **The issuer is per-tenant** — validated against the token's own `tid`. Never `ValidateIssuer=false`.
+- **`MapInboundClaims = false` is mandatory.** The default map renames `tid`/`oid`/`sub`/`email` to
+  schema URIs and every `FindFirst("tid")` silently returns null. This exact bug shipped in
+  `AppleTokenVerifier` and broke Apple sign-in outright until v37.
+- Identity from the `id_token`, not Graph `/me` — it carries `tid` and costs no extra hop.
+- `ProviderUserId` = `oid` (not `sub`, which is pairwise-per-app and useless in support).
+- **Entra often omits `email`** → falls back to `preferred_username`, then `upn`, first that parses as
+  an address. Add `email` as an optional ID claim in the app registration.
+- A nonce is minted in `InitiateOAuth`, sealed in the signed state *and* sent to Microsoft, then
+  asserted on return.
+
+**Linking requires a verified email.** `LinkOrCreateUserAsync` adopts a pre-existing account only when
+the provider vouches for the address (`EMAIL_LINK_UNVERIFIED` otherwise). Creating a *new* account on
+an unverified email is unaffected. Verified: Microsoft (always) · Google (`verified_email`) · GitHub
+(only via `/user/emails`) · Apple (`email_verified`) · Facebook (never — Graph asserts nothing).
+
 ### Role-based access
-Roles (stored in `organization_members.role`): `owner`, `admin`, `bid_manager`, `finance`, `sales`, `viewer`
+
+Roles (`org_members.role`):
+
+| Kind | Roles |
+|---|---|
+| Supplier-side | `owner`, `admin`, `bid_manager`, `finance`, `sales`, `viewer` |
+| Buyer-side (migration `0031`) | `po_admin`, `po_publisher`, `po_opener`, `po_evaluator`, `auditor` |
+
+**Authorization (`Core/Authorization/OrgRoles.cs` + `Api/Filters/RequireOrgCapabilityAttribute.cs`)**
+
+`OrgContextMiddleware` proves *membership* and deliberately never reads the role. The capability
+filter answers the other question: membership says you are in the room, a capability says you may
+touch this.
+
+- Endpoints declare **capabilities** (`tender.author`, `tender.publish`, `tender.read`,
+  `committee.manage`), never roles. Adding a role is one edit to `OrgCapabilities.Grants`.
+- `owner` and `admin` hold everything. The separation of duties that matters (creator ≠ publisher)
+  is surfaced as a publish-time warning and recorded in the audit trail, rather than enforced into a
+  dead end for a one-officer department.
+- Unknown or null role → **no capability**. Fails closed.
+- A method-level attribute **overrides** a controller-level one (it does not intersect).
+
+**The 403 is distinguishable from the membership 403.** This filter answers with
+`code: "FORBIDDEN_ROLE"` plus the missing `capability` and the `role` held; the membership 403 has
+no `code`. Clients branch on that instead of re-fetching `/api/auth/me` to guess which one it was.
+
+> ⚠️ **Applied to `/api/buyer/tenders` only.** Every other endpoint is still membership-only — any
+> member can do anything their org can. That is a real gap; retrofitting it is a separate change.
 
 ## Database
 
@@ -162,9 +234,11 @@ Key table groups:
 | Group | Tables |
 |---|---|
 | Auth | `users`, `oauth_accounts`, `refresh_tokens` |
-| Multi-tenancy | `organizations`, `organization_members` |
+| Multi-tenancy | `organizations`, `org_members` |
+| Enterprise SSO | `org_sso_domains` + `organizations.entra_tenant_id`/`sso_default_role` + `oauth_accounts.tenant_id` (migration `0032`) |
 | Procurement | `tenders`, `saved_tenders`, `tender_documents`, `tender_analysis` |
 | Bids | `bids`, `bid_activities`, `bid_checklists`, `bid_comments` |
+| Grant lifecycle | `saved_grants` (`0035`); `grant_applications` + `grant_application_activities` + `grant_application_checklist_items` (`0036`, generated `status_category`); `grant_narrative_sections` + `grant_budget_line_items` (`0037`); `grant_reviews` + `grant_submissions` (`0038`). Org-scoped; the grants analog of the bids tables |
 | Compliance | `compliance_requirements`, `compliance_documents` |
 | Documents | `documents`, `document_versions`, `document_folders` |
 | Fulfillment | `orders`, `order_items`, `order_milestones` |
@@ -173,6 +247,7 @@ Key table groups:
 | Platform | `user_notifications`, `gem_integrations`, `analysis_results` |
 | Notification dispatch | `notifications`, `notification_deliveries`, `notification_templates`, `notification_logs` |
 | Tender-match digests | `tender_alert_rules`, `org_alert_settings`, `tender_matches` (migration `0004`) |
+| Buyer-side tendering | `tender_drafts`, `tender_versions`, `tender_ownership`, `corrigenda`, `audit_events`, `tender_committee_members` (migration `0031`) · `org_buyer_requests` (buyer-access requests, `0033`) |
 | Schema | `schema_migrations` (DbMigrator state) |
 
 **Naming-rename note:** what used to be `notifications` (the in-app inbox the
@@ -557,6 +632,119 @@ UNIQUE(org,tender) (DB guard). Concurrent runs are gated by an in-process semaph
 - **Services:** `ITenderAlertRuleService` (CRUD + settings), `IMatchingService` (`ScanNewTendersAsync` scheduled scan + `FlushAllDueAsync` legacy fallback). Worker: `TenderMatchScanWorker` (config `Matching:*`). UI: SettingsPage → **Interests** tab.
 - **Starter rule from onboarding:** `OrganizationService.SeedStarterAlertRuleAsync` turns the sector picked at onboarding (`organizations.primary_category`) into one category-only rule — on create, and on the PATCH that first sets the sector. Idempotent: skipped if the org already owns any rule, so editing interests or re-running onboarding never duplicates it (the table has no unique constraint). Failure is caught and logged; it never fails org creation. This only works because the picker emits the **canonical taxonomy verbatim** — matching is exact, so a free-form sector would match nothing forever.
 - **Go-live:** apply migrations `0004` + `0008`; the scan runs in-process via `TenderMatchScanWorker` — no external cron required (or drive `POST /internal/matching/scan` instead). `0008` marks all existing tenders scanned so the first run won't blast the backlog; use `?backfill=true` for a deliberate one-time backfill. Ensure BidProcessor `BffInternalApi:ApiKey` matches `Pipeline:ApiKey` so tenders actually reach Postgres to be matched.
+
+## Buyer-side tendering
+
+A government department **authors** a tender notice here rather than us scraping one.
+Plan: `docs/gov-tendering/PLAN.md`. Migration `0031`. Requires Services v14.
+
+**Phase 1 = e-publishing only.** We host and distribute the *notice*; bids are still received
+wherever the department receives them today. Because no bid ever touches this system, none of the
+STQC certification / PKI / HSM machinery applies. That boundary is the design — Phase 3 (sealed
+bids) is 12–18 months and gated on unresolved legal questions (PLAN §1.4).
+
+### Becoming a buyer
+
+Two paths, both ending in the **same** `OrganizationService.SetOrgTypeAsync` conversion, which is the
+only code that writes `org_type` and it always writes an `audit_events` row. `CreateOrgDto` /
+`UpdateOrgDto` deliberately don't carry `org_type` — a buyer publishes notices on the public portal
+under a department's name, so the claim is never self-asserted.
+
+**1. Direct provisioning** (a department you go out and onboard):
+
+```bash
+curl -X POST http://localhost:5124/internal/organizations/<orgId>/org-type \
+  -H "X-Api-Key: <Pipeline:ApiKey>" -H "Content-Type: application/json" \
+  -d '{"orgType":"buyer","entityType":"state","ministry":"Public Works",
+       "department":"PWD","verificationNote":"Verified against F.No.12-3/2026-Admin"}'
+```
+
+**2. Request → approve** (a supplier asks; migration `0033`): the org's owner/admin raises a request
+from Settings (`POST /api/organizations/buyer-request`), an operator reviews the queue
+(`GET /internal/organizations/buyer-requests`) and approves — which runs path 1 under the hood with
+the identity the org claimed:
+
+```bash
+curl -X POST http://localhost:5124/internal/organizations/buyer-requests/<requestId>/approve \
+  -H "X-Api-Key: <Pipeline:ApiKey>" -H "Content-Type: application/json" \
+  -d '{"decisionNote":"Verified official email domain","orgType":"buyer"}'
+# reject:  .../buyer-requests/<requestId>/reject  -d '{"decisionNote":"could not verify"}'
+```
+
+`org_buyer_requests` has **one pending row per org** (partial unique index); decided rows are history
+so a rejected org can reapply. Optionally set `BuyerRequests:NotifyEmail` so a submitted request
+emails an operator rather than only sitting in the queue — there is no operator *user* to notify.
+
+Either way the org **owner** then holds every buyer capability, so authoring is unlocked. Splitting
+`po_admin` from `po_publisher` is a Team-page action (those roles appear in the picker only for a
+`buyer`/`both` org). **There is no in-app operator console** — approval is a `/internal` call.
+
+### Where the data lives
+
+```
+tender_drafts (Postgres)          ← authoring + the AUDIT TRUTH
+   │  publish / corrigendum
+   ├─→ tender_versions            ← immutable, hash-chained, never updated or deleted
+   │
+   ├─→ Mongo `tenders` (Services, POST /api/tenders/direct, platform="direct")
+   │      → public portal, /explore, SEO hubs, tender detail   [no new read-side code]
+   │
+   └─→ Postgres `tenders` (via the pipeline's own UpsertTenderAsync)
+          → TenderMatchScanWorker → supplier alerts
+```
+
+**Both projections are required.** The read surfaces resolve out of Mongo, but the matching rail
+scans the **Postgres** `tenders` table for `alerts_scanned_at IS NULL`. A Mongo-only projection
+would be publicly visible and would alert nobody.
+
+The Mongo projection is an upsert and is *meant* to be mutable — a corrigendum must change what
+suppliers see. Immutability lives in `tender_versions`.
+
+### The hash chain
+
+`content_hash = sha256(canonical_json(snapshot))`, `chain_hash = sha256(prev || content)`, genesis
+from the empty string. `Core/Compliance/TenderHashChain.cs`.
+
+- Canonicalisation sorts object keys **recursively** and strips whitespace, so a document differing
+  only in key order hashes identically. **Array order is preserved** — line items 1,2,3 are not the
+  same BOQ as 3,2,1.
+- `Verify` recomputes from the snapshot rather than trusting the stored content hash, so rewriting a
+  row's content *and* its hash together is still caught.
+- **Tamper-evident, not tamper-proof.** Whoever can write these rows can rebuild the chain. RFC 3161
+  timestamping closes that and is Phase 3. The audit file says so in its `method` field.
+
+### The compliance engine
+
+`Core/Compliance/TenderComplianceRules.cs`. Every finding carries the **citation** of the instrument
+behind it (MSE Order 2012, PPP-MII, GFR 144(xi), Integrity Pact, GFR 149/159/160, CVC). An auditor
+wants the authority, not our opinion.
+
+`Version` (`2026.07.1`) is pinned onto every published version. **Bump it whenever a threshold,
+severity or citation changes** — a historical tender must be re-evaluated under the rules it was
+published beneath, or the engine gives a confidently wrong audit answer.
+
+Severity is load-bearing: an **error** blocks publication, a **warning** can be overridden with
+`acknowledgeWarnings: true` (and the acknowledgement is recorded).
+
+> ⚠️ **An off-taxonomy category is an ERROR, not a warning.** Services rewrites it silently and
+> supplier alert matching is an **exact** string match — so a free-text category publishes a tender
+> that matches **nobody, forever**, with no error and no log line. Three layers guard it: the
+> authoring form only offers canonical values (`GET /api/buyer/tenders/options`, fed from Services'
+> `/api/tenders/taxonomy`), this engine rejects, and Services' `direct` endpoint rejects again.
+
+### Gotchas
+
+- **Reference codes are ours and URL-safe** (`TA-2026-000123`, from `tender_reference_seq`). The
+  department's own file number (`F.No.12-3/2026-Admin`) is a display field only — slashes in an id
+  are already why the enrichment-status endpoint takes its id in a body rather than a route.
+- **A published tender is never edited in place.** `PATCH` refuses; amend via `POST /{id}/corrigenda`
+  so bidders are notified and the chain records it.
+- **No hard delete of anything published.** Only a `draft` can be deleted; a published tender is
+  cancelled, and the cancellation is itself a corrigendum.
+- **Buyer uploads go to R2**, not the AWS tender bucket — the tender presign endpoint resolves its
+  client by the fixed `"TenderS3"` key, so use the org-document presign route.
+- `audit_events` has **no FK** to its subject, deliberately: the trail must survive the deletion of
+  what it describes.
 
 ## Key Reference
 

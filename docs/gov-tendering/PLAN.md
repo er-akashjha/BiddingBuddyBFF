@@ -1,7 +1,29 @@
 # Buyer-Side Tendering — Letting Government Departments Publish Tenders
 
-**Status:** PLAN ONLY — nothing built. Written 2026-07-20.
+**Status:** **PHASE 1 BUILT 2026-07-23** — BFF v35 (migration `0031`) · Services v14 · ui v30.
+Written 2026-07-20. Phases 2 and 3 remain unbuilt.
 **Scope:** Add a tender-authoring and publishing capability for government buyers, in the app and on the public tendersagent.com portal.
+
+> ### What Phase 1 actually shipped
+>
+> A buyer org (`organizations.org_type = 'buyer'`) authors a tender through a multi-step form,
+> validates it against the compliance engine, and publishes. Publication appends a hash-chained
+> immutable version, projects into Mongo as `source.platform = "direct"` (public portal, `/explore`,
+> SEO hubs) **and** into Postgres `tenders` (the supplier matching rail). Corrigenda append a
+> field-level diff plus a version and notify the suppliers who were alerted to the tender. An audit
+> file replays the chain for inspection.
+>
+> **Also delivered:** the first authorization enforcement point in the API (§5.2.7) — a general
+> capability attribute + filter, applied to buyer routes only.
+>
+> **Built but NOT in Phase 1 as planned:** AI-assisted NIT/BOQ drafting (§2.7), the CPPP XML
+> exporter (§4.K — the spec was never obtained, §7.3, so writing it would be guesswork), the
+> GeMARPTS generator (§2.6), and the newspaper-ad text generator. All additive on top of what exists.
+>
+> **Still owed before selling this:** §7's recommended next steps 1–4 are untouched — no beachhead
+> decision, no letter to STQC on the eSign/Class-3 contradiction, no CPPP XML spec, and **no
+> interviews with real procurement officers**. Everything in §2 marked **[I]** is still inference.
+> Nothing here has been run against a real department.
 
 ---
 

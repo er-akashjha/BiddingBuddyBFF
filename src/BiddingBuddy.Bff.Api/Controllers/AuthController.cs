@@ -14,11 +14,13 @@ public class AuthController(
     IAuthService authService,
     ITokenService tokenService,
     IOAuthProviderService oauthProvider,
+    ISsoService ssoService,
     IConfiguration config,
     IWebHostEnvironment env) : ControllerBase
 {
     // Order here is the canonical display order for GET /api/auth/providers.
-    private static readonly string[] SupportedProviders = ["google", "facebook", "github"];
+    // microsoft sits second: it is the enterprise path, and enterprises are who ask for SSO.
+    private static readonly string[] SupportedProviders = ["google", "microsoft", "facebook", "github"];
 
     /// <summary>A supported provider is enabled unless <c>OAuth:{Provider}:Enabled</c> is
     /// explicitly false (config keys are case-insensitive, so the lowercase name works).</summary>
@@ -157,6 +159,22 @@ public class AuthController(
         => Ok(new { providers = SupportedProviders.Where(IsProviderEnabled).ToArray() });
 
     /// <summary>
+    /// Whether an email's domain is routed to an enterprise identity provider — drives the
+    /// email-first login box (send to Microsoft, or reveal the password field). Anonymous by design:
+    /// the caller has not authenticated yet, which is the entire question being asked.
+    /// </summary>
+    /// <remarks>
+    /// Always 200, even for an unknown domain or a malformed address, and the body carries the
+    /// provider and nothing else. Two reasons: a 404 here is a routine miss that would fill the
+    /// SPA's error rail, and returning the org name would turn this into an anonymous directory of
+    /// our customers keyed by any domain a caller cares to guess.
+    /// </remarks>
+    [HttpGet("sso/lookup")]
+    [ProducesResponseType(typeof(SsoLookupDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SsoLookup([FromQuery] string? email, CancellationToken ct)
+        => Ok(await ssoService.LookupByEmailAsync(email, ct));
+
+    /// <summary>
     /// Redirect the browser to the OAuth provider consent page (Google, Facebook or GitHub).
     /// Native apps additionally pass <c>client=mobile</c>, a PKCE S256 <c>code_challenge</c>
     /// and an allowlisted <c>redirect_uri</c> — the callback then bounces a one-time code
@@ -170,12 +188,18 @@ public class AuthController(
         [FromQuery] string returnUrl = "/",
         [FromQuery] string? client = null,
         [FromQuery(Name = "code_challenge")] string? codeChallenge = null,
-        [FromQuery(Name = "redirect_uri")] string? redirectUri = null)
+        [FromQuery(Name = "redirect_uri")] string? redirectUri = null,
+        [FromQuery(Name = "login_hint")] string? loginHint = null)
     {
         provider = provider.ToLower();
         // Disabled providers are rejected here too — hiding the button isn't the gate.
         if (!SupportedProviders.Contains(provider) || !IsProviderEnabled(provider))
             return BadRequest(new { error = $"Provider '{provider}' is not supported." });
+
+        // One nonce, generated here, sealed into the signed state AND sent to the provider. Pinning
+        // the same string in both places is what lets the callback prove the id_token it receives
+        // was minted for this sign-in and not replayed from another.
+        var nonce = Guid.NewGuid().ToString("N");
 
         OAuthStateData stateData;
         if (client == "mobile")
@@ -184,15 +208,19 @@ public class AuthController(
                 return BadRequest(new { error = "A valid S256 code_challenge is required for mobile sign-in." });
             if (redirectUri is null || !IsMobileRedirectAllowed(redirectUri))
                 return BadRequest(new { error = "redirect_uri is not on the mobile allowlist." });
-            stateData = new OAuthStateData(returnUrl, "mobile", codeChallenge, redirectUri);
+            stateData = new OAuthStateData(returnUrl, "mobile", codeChallenge, redirectUri, nonce);
         }
         else
         {
-            stateData = new OAuthStateData(returnUrl);
+            // Seal the (allowlisted) origin this sign-in began on, so the callback returns the user to
+            // the SAME branded app (e.g. grants.tendersagent.com) instead of the default frontend.
+            stateData = new OAuthStateData(returnUrl, Nonce: nonce, Origin: ResolveAllowedOrigin());
         }
 
         var state = tokenService.GenerateStateToken(stateData);
-        var authUrl = oauthProvider.GetAuthorizationUrl(provider, state);
+        // login_hint only pre-selects an account in the provider's own picker. It is never read back
+        // as identity, so a tampered value changes what the user sees and nothing else.
+        var authUrl = oauthProvider.GetAuthorizationUrl(provider, state, nonce, loginHint);
         return Redirect(authUrl);
     }
 
@@ -213,6 +241,38 @@ public class AuthController(
         return env.IsDevelopment() &&
                (redirectUri.StartsWith("exp://") || redirectUri.StartsWith("exps://"));
     }
+
+    /// <summary>
+    /// The frontend origin this web sign-in was STARTED from, if it is an allowlisted branded domain
+    /// (<c>Frontend:AllowedOrigins</c>) — e.g. <c>https://grants.tendersagent.com</c>. Sealed into the
+    /// signed state at initiation so the callback can return the user to the SAME app instead of the
+    /// single default <c>Frontend:BaseUrl</c>. The Host header travels intact end-to-end (Caddy and the
+    /// SPA's nginx both preserve it); scheme is forced https outside Development. Returns null when the
+    /// origin isn't allowlisted, and the callback then falls back to the default. Any localhost is
+    /// accepted in Development so a local second SPA can test the flow.
+    /// </summary>
+    private string? ResolveAllowedOrigin()
+    {
+        if (string.IsNullOrEmpty(Request.Host.Value)) return null;
+        var scheme = env.IsDevelopment() ? Request.Scheme : "https";
+        var origin = $"{scheme}://{Request.Host.Value}";
+        if (env.IsDevelopment() && Request.Host.Host is "localhost" or "127.0.0.1")
+            return origin;
+        var allow = config.GetSection("Frontend:AllowedOrigins").Get<string[]>() ?? [];
+        return allow.Any(o => string.Equals(o.TrimEnd('/'), origin, StringComparison.OrdinalIgnoreCase))
+            ? origin
+            : null;
+    }
+
+    /// <summary>
+    /// Where the web callback sends the browser: the origin the flow began on when one was sealed into
+    /// the (signed, tamper-proof) state, else the default <c>Frontend:BaseUrl</c>. Trusting
+    /// <c>state.Origin</c> here is safe — it was allowlisted at initiation and the state is HMAC-signed.
+    /// </summary>
+    private string ResolveFrontendBase(OAuthStateData state) =>
+        !string.IsNullOrEmpty(state.Origin)
+            ? state.Origin!
+            : (config["Frontend:BaseUrl"] ?? "http://localhost:3000");
 
     /// <summary>OAuth callback — exchanges code for tokens and redirects to the frontend.</summary>
     [HttpGet("oauth/{provider}/callback")]
@@ -237,9 +297,9 @@ public class AuthController(
 
         try
         {
-            var tokens = await authService.HandleOAuthCallbackAsync(provider, code, ct);
+            var tokens = await authService.HandleOAuthCallbackAsync(provider, code, stateData.Nonce, ct);
 
-            var frontendBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
+            var frontendBase = ResolveFrontendBase(stateData);
             var callbackPath = config["Frontend:AuthCallbackPath"] ?? "/auth/callback";
             // is_new is a cosmetic hint for the SPA (welcome copy) — onboarding routing
             // is gated on "authenticated but no org", not on this flag.
@@ -254,7 +314,7 @@ public class AuthController(
         }
         catch (Exception ex)
         {
-            var frontendBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
+            var frontendBase = ResolveFrontendBase(stateData);
             return Redirect($"{frontendBase}/auth/error?message={Uri.EscapeDataString(ex.Message)}");
         }
     }
@@ -271,7 +331,7 @@ public class AuthController(
         try
         {
             var result = await authService.HandleOAuthCallbackForMobileAsync(
-                provider, code, state.CodeChallenge!, ct);
+                provider, code, state.CodeChallenge!, state.Nonce, ct);
             return Redirect(
                 $"{state.RedirectUri}{sep}code={Uri.EscapeDataString(result.Code)}&is_new={(result.IsNewUser ? "1" : "0")}");
         }

@@ -169,3 +169,87 @@ public record MyInviteDto(
 public record InviteTokenDto(string Token);
 
 public record UpdateMemberDto(string? Role, string? Department, string? Status);
+
+/// <summary>
+/// Operator request to grant or revoke buyer status (<c>POST /internal/organizations/{id}/org-type</c>).
+/// </summary>
+/// <remarks>
+/// Deliberately NOT part of <see cref="CreateOrgDto"/> or <see cref="UpdateOrgDto"/>. A buyer org can
+/// publish notices on the public portal under a department's name, so becoming one is provisioned by
+/// an operator after whatever verification happened offline — never claimed by the org itself.
+///
+/// <para><paramref name="VerificationNote"/> is free text recorded in the audit trail — a file
+/// number, an email, whatever proved this is really the department it says it is.</para>
+/// </remarks>
+public record SetOrgTypeDto(
+    string OrgType,
+    string? EntityType = null,
+    string? Ministry = null,
+    string? Department = null,
+    string? Office = null,
+    string? ProcuringEntityCode = null,
+    string? VerificationNote = null);
+
+public record OrgTypeResultDto(
+    Guid OrgId,
+    string Name,
+    string PreviousOrgType,
+    string OrgType,
+    string? EntityType,
+    string? Ministry,
+    string? Department,
+    string? Office,
+    string? ProcuringEntityCode);
+
+// ── Buyer access requests (migration 0033) ───────────────────────────────────
+
+/// <summary>
+/// An owner/admin asking the platform to make their org a buyer. Self-serve to RAISE; an operator
+/// still decides, because a buyer publishes under a department's name.
+/// </summary>
+public record RequestBuyerAccessDto(
+    string Justification,
+    string? EntityType = null,
+    string? Ministry = null,
+    string? Department = null,
+    string? Office = null,
+    string? ProcuringEntityCode = null);
+
+/// <summary>The org's own view of its request — drives the Settings card's state.</summary>
+public record BuyerRequestDto(
+    Guid Id,
+    Guid OrgId,
+    string Status,
+    string? EntityType,
+    string? Ministry,
+    string? Department,
+    string? Office,
+    string? ProcuringEntityCode,
+    string Justification,
+    string? DecisionNote,
+    string RequesterName,
+    DateTime? DecidedAt,
+    DateTime CreatedAt);
+
+/// <summary>The operator's queue row — the org, who asked, and what they claimed.</summary>
+public record BuyerRequestQueueItemDto(
+    Guid Id,
+    Guid OrgId,
+    string OrgName,
+    string? OrgGstin,
+    string Status,
+    string? EntityType,
+    string? Ministry,
+    string? Department,
+    string? Office,
+    string? ProcuringEntityCode,
+    string Justification,
+    string RequesterName,
+    string RequesterEmail,
+    DateTime CreatedAt);
+
+/// <summary>Operator's decision. <c>OrgType</c> defaults to <c>buyer</c>; an operator may grant
+/// <c>both</c> for a PSU that also bids.</summary>
+public record ApproveBuyerRequestDto(string? DecisionNote = null, string OrgType = "buyer");
+
+public record RejectBuyerRequestDto(string DecisionNote);

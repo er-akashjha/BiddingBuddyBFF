@@ -1,12 +1,14 @@
 using System.Security.Cryptography;
 using System.Text;
 using BCrypt.Net;
+using BiddingBuddy.Bff.Core.Authorization;
 using BiddingBuddy.Bff.Core.DTOs.Auth;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
@@ -21,6 +23,7 @@ public class AuthService(
     TokenService tokenService,
     INotificationPublisher notifications,
     BffDbContext db,
+    IConfiguration config,
     ILogger<AuthService> log) : IAuthService
 {
     public async Task<RegistrationPendingDto> StartRegistrationAsync(RegisterDto dto, CancellationToken ct = default)
@@ -358,17 +361,17 @@ public class AuthService(
     }
 
     public async Task<TokenResponseDto> HandleOAuthCallbackAsync(
-        string provider, string code, CancellationToken ct = default)
+        string provider, string code, string? expectedNonce = null, CancellationToken ct = default)
     {
-        var (user, isNewUser) = await ResolveOAuthUserAsync(provider, code, ct);
+        var (user, isNewUser) = await ResolveOAuthUserAsync(provider, code, expectedNonce, ct);
         var tokens = await IssueTokensAsync(user, ct);
         return tokens with { IsNewUser = isNewUser };
     }
 
     public async Task<MobileOAuthCodeDto> HandleOAuthCallbackForMobileAsync(
-        string provider, string code, string codeChallenge, CancellationToken ct = default)
+        string provider, string code, string codeChallenge, string? expectedNonce = null, CancellationToken ct = default)
     {
-        var (user, isNewUser) = await ResolveOAuthUserAsync(provider, code, ct);
+        var (user, isNewUser) = await ResolveOAuthUserAsync(provider, code, expectedNonce, ct);
 
         // Hand the app a short-lived single-use code instead of tokens — tokens must
         // never ride a redirect URL (system logs, link interception). The app redeems
@@ -430,7 +433,11 @@ public class AuthService(
             ProviderUserId: identity.Sub,
             Email: NormalizeEmail(email),
             Name: string.IsNullOrWhiteSpace(dto.FullName) ? "Apple User" : dto.FullName!.Trim(),
-            AvatarUrl: null, AccessToken: null, ProviderRefreshToken: null, TokenExpiresAt: null);
+            AvatarUrl: null, AccessToken: null, ProviderRefreshToken: null, TokenExpiresAt: null,
+            // Apple has always told us this and we discarded it. A private-relay address is
+            // verified; a self-asserted one on a returning sign-in is not, and must not silently
+            // adopt an existing account.
+            EmailVerified: identity.EmailVerified);
 
         var (user, isNewUser) = await LinkOrCreateUserAsync("apple", info, ct);
         var tokens = await IssueTokensAsync(user, ct);
@@ -502,10 +509,10 @@ public class AuthService(
     /// Both the web callback (tokens) and the mobile callback (one-time code) build on this.
     /// </summary>
     private async Task<(User user, bool isNewUser)> ResolveOAuthUserAsync(
-        string provider, string code, CancellationToken ct)
+        string provider, string code, string? expectedNonce, CancellationToken ct)
     {
         // Exchange the provider code for a verified identity, then link/create the user.
-        var info = await oauthProvider.ExchangeCodeAsync(provider, code, ct);
+        var info = await oauthProvider.ExchangeCodeAsync(provider, code, expectedNonce, ct);
         return await LinkOrCreateUserAsync(provider, info, ct);
     }
 
@@ -517,6 +524,8 @@ public class AuthService(
     private async Task<(User user, bool isNewUser)> LinkOrCreateUserAsync(
         string provider, OAuthUserInfo info, CancellationToken ct)
     {
+        var tenantId = ParseTenantId(info.TenantId);
+
         // Find or create the linked OAuthAccount
         var oauthAccount = await oauthRepo.FindAsync(provider, info.ProviderUserId, ct);
 
@@ -529,6 +538,10 @@ public class AuthService(
             oauthAccount.AccessToken = info.AccessToken;
             oauthAccount.RefreshToken = info.ProviderRefreshToken;
             oauthAccount.TokenExpiresAt = info.TokenExpiresAt;
+            // Re-stamped every sign-in, not just at link time: a directory migration or tenant
+            // merge changes the tid for an unchanged oid, and a stale value here would keep
+            // auto-joining the old workspace.
+            if (tenantId is not null) oauthAccount.TenantId = tenantId;
             await oauthRepo.UpdateAsync(oauthAccount, ct);
         }
         else
@@ -549,6 +562,20 @@ public class AuthService(
             }
             else
             {
+                // Adopting an account that already exists on this email is a privilege transfer, so
+                // the provider has to actually vouch for the address. Without this check, any
+                // provider that lets a user type an unverified email — or that simply declines to
+                // say — is a way to walk into someone else's account by signing up with their
+                // address. Creating a NEW account on an unverified email stays fine; it is only the
+                // adoption of an existing one that is gated.
+                if (!info.EmailVerified)
+                {
+                    log.LogWarning(
+                        "Refused to link {Provider} identity to existing user {UserId}: provider did not verify the email.",
+                        provider, existing.Id);
+                    throw new InvalidOperationException("EMAIL_LINK_UNVERIFIED");
+                }
+
                 user = existing;
             }
 
@@ -562,6 +589,7 @@ public class AuthService(
                 AccessToken = info.AccessToken,
                 RefreshToken = info.ProviderRefreshToken,
                 TokenExpiresAt = info.TokenExpiresAt,
+                TenantId = tenantId,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             }, ct);
@@ -573,13 +601,134 @@ public class AuthService(
             user.AvatarUrl = info.AvatarUrl;
         await userRepo.UpdateAsync(user, ct);
 
-        // First-time OAuth signup → fire WELCOME. The user has no org yet (orgs are
-        // created/joined later), so OrganizationName is left blank in the payload.
+        // Enterprise SSO: a tenant-matched sign-in walks straight into its workspace.
+        var joinedOrgName = tenantId is null
+            ? null
+            : await TryAutoJoinByTenantAsync(user, tenantId.Value, info.Email, ct);
+
+        // First-time OAuth signup → fire WELCOME. Normally the user has no org yet (orgs are
+        // created/joined later), so OrganizationName is blank — unless SSO just placed them in one.
         if (isNewUser)
-            await SendWelcomeAsync(user, organizationName: null, ct);
+            await SendWelcomeAsync(user, organizationName: joinedOrgName, ct);
 
         return (user, isNewUser);
     }
+
+    /// <summary>
+    /// Places a Microsoft user into the organization that has bound their Entra directory, if any.
+    /// Returns the org name when a membership was created, else null.
+    /// </summary>
+    /// <remarks>
+    /// <b>The tenant id is the only input that grants anything here.</b> It arrives in a
+    /// signature-verified <c>id_token</c> whose issuer was checked against that very tenant, so it
+    /// cannot be asserted by the user. The email domain is recorded afterwards purely so the login
+    /// page knows where to route that domain next time — it is never consulted to decide membership.
+    ///
+    /// <para>Failures are swallowed: a sign-in that cannot auto-join should still be a sign-in. The
+    /// user lands on onboarding exactly as they would have before this feature existed.</para>
+    /// </remarks>
+    private async Task<string?> TryAutoJoinByTenantAsync(
+        User user, Guid tenantId, string email, CancellationToken ct)
+    {
+        try
+        {
+            var org = await db.Organizations
+                .FirstOrDefaultAsync(o => o.EntraTenantId == tenantId && o.IsActive, ct);
+            if (org is null) return null;
+
+            // Record the routing domain regardless of whether a membership was needed — an existing
+            // member signing in is just as good a witness that this domain belongs to this tenant.
+            await CaptureSsoDomainAsync(org.Id, email, ct);
+
+            var already = await db.OrgMembers
+                .AnyAsync(m => m.OrgId == org.Id && m.UserId == user.Id, ct);
+            if (already) return null;
+
+            // Fail closed on an unrecognised role. sso_default_role has a CHECK constraint, but a
+            // role could be retired from the vocabulary while rows still carry it, and silently
+            // granting an unknown role is worse than granting the weakest known one.
+            var role = OrgRoles.All.Contains(org.SsoDefaultRole) ? org.SsoDefaultRole : OrgRoles.Viewer;
+            if (role != org.SsoDefaultRole)
+            {
+                log.LogWarning(
+                    "Org {OrgId} has unrecognised sso_default_role '{Role}'; falling back to viewer.",
+                    org.Id, org.SsoDefaultRole);
+            }
+
+            await orgRepo.AddMemberAsync(new OrgMember
+            {
+                OrgId     = org.Id,
+                UserId    = user.Id,
+                Role      = role,
+                Status    = "active",
+                JoinedAt  = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow,
+            }, ct);
+
+            log.LogInformation(
+                "User {UserId} auto-joined org {OrgId} as {Role} via Entra tenant {TenantId}.",
+                user.Id, org.Id, role, tenantId);
+
+            await SendSsoJoinedAsync(org, user, role, ct);
+            return org.Name;
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex,
+                "SSO auto-join failed for user {UserId} on tenant {TenantId}; sign-in itself succeeded.",
+                user.Id, tenantId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Remembers that this email domain belongs to this org, so the login page can route it to
+    /// Microsoft instead of showing a password box. Routing data only — it grants nothing.
+    /// </summary>
+    private async Task CaptureSsoDomainAsync(Guid orgId, string email, CancellationToken ct)
+    {
+        var at = email.LastIndexOf('@');
+        if (at < 0 || at == email.Length - 1) return;
+        var domain = email[(at + 1)..].Trim().ToLowerInvariant();
+
+        // Belt-and-braces. The /organizations authority should already have excluded consumer
+        // accounts, so a public mailbox domain here means an assumption broke somewhere upstream —
+        // and claiming gmail.com as one org's routing domain would send every Gmail user on the
+        // platform to that org's identity provider.
+        if (ConsumerEmailDomains.Contains(domain)) return;
+
+        if (await db.OrgSsoDomains.AnyAsync(d => d.Domain == domain, ct)) return;
+
+        db.OrgSsoDomains.Add(new OrgSsoDomain
+        {
+            Id        = Guid.NewGuid(),
+            OrgId     = orgId,
+            Domain    = domain,
+            Source    = "entra",
+            CreatedAt = DateTime.UtcNow,
+        });
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Two sign-ins from the same new domain racing each other. The unique index picked a
+            // winner and the loser has nothing left to do.
+            db.ChangeTracker.Clear();
+        }
+    }
+
+    private static readonly HashSet<string> ConsumerEmailDomains = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com",
+        "yahoo.com", "yahoo.co.in", "yahoo.co.uk", "icloud.com", "me.com", "aol.com",
+        "proton.me", "protonmail.com", "rediffmail.com", "zoho.com",
+    };
+
+    private static Guid? ParseTenantId(string? tenantId)
+        => Guid.TryParse(tenantId, out var parsed) ? parsed : null;
 
     // Single-use refresh rotation is unforgiving on flaky mobile networks: if the client
     // never receives the rotation response, its only token is already revoked → forced logout.
@@ -634,7 +783,7 @@ public class AuthService(
         var providers = oauthAccounts.Select(a => a.Provider).ToList();
 
         return new UserDto(user.Id, user.Email, user.Name, user.AvatarUrl, user.Phone,
-            orgDtos, providers);
+            orgDtos, providers, user.IsPlatformAdmin);
     }
 
     public async Task UnlinkProviderAsync(Guid userId, string provider, CancellationToken ct = default)
@@ -684,7 +833,8 @@ public class AuthService(
         {
             var role = await orgRepo.GetUserRoleAsync(org.Id, userId, ct) ?? "viewer";
             result.Add(new UserOrgDto(
-                org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive, org.PrimaryCategory, org.GemSellerName));
+                org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive, org.PrimaryCategory,
+                org.GemSellerName, org.OrgType));
         }
         return result;
     }
@@ -827,6 +977,57 @@ public class AuthService(
         catch (Exception ex)
         {
             log.LogWarning(ex, "WELCOME notification failed for user {UserId}; signup itself succeeded.", user.Id);
+        }
+    }
+
+    /// <summary>
+    /// Tells an org's owners and admins that SSO let somebody in. Auto-join is the only route into a
+    /// workspace that no human approved, so the after-the-fact notice is the control that keeps it
+    /// honest — without it, the first sign an admin gets is a stranger in the member list.
+    /// </summary>
+    private async Task SendSsoJoinedAsync(Organization org, User member, string role, CancellationToken ct)
+    {
+        try
+        {
+            var admins = await db.OrgMembers
+                .Where(m => m.OrgId == org.Id && m.Status == "active"
+                            && (m.Role == OrgRoles.Owner || m.Role == OrgRoles.Admin)
+                            && m.UserId != member.Id)
+                .Join(db.Users, m => m.UserId, u => u.Id, (m, u) => u)
+                .Where(u => u.IsActive)
+                .ToListAsync(ct);
+
+            if (admins.Count == 0) return;
+
+            var appBase = config["Frontend:BaseUrl"] ?? "http://localhost:3000";
+
+            foreach (var admin in admins)
+            {
+                await notifications.SendAsync(new SendNotificationDto(
+                    Category:     NotificationCategory.Information,
+                    TemplateCode: "SSO_MEMBER_JOINED",
+                    UserId:       admin.Id,
+                    Payload:      new Dictionary<string, object>
+                    {
+                        ["FirstName"]   = FirstName(admin.Name),
+                        ["MemberName"]  = member.Name,
+                        ["MemberEmail"] = member.Email,
+                        ["OrgName"]     = org.Name,
+                        ["Role"]        = role,
+                        ["Link"]        = $"{appBase}/team",
+                    },
+                    Recipients: new[]
+                    {
+                        new NotificationRecipientDto(NotificationChannel.Email, admin.Email),
+                        new NotificationRecipientDto(NotificationChannel.InApp, admin.Id.ToString()),
+                    }), ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex,
+                "SSO_MEMBER_JOINED notification failed for org {OrgId}; the membership itself was created.",
+                org.Id);
         }
     }
 

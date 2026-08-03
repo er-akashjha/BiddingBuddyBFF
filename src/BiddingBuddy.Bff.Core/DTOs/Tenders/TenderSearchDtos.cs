@@ -24,6 +24,14 @@ public record TenderSearchQueryDto
     public string?   SortOrder         { get; init; }
     public int       Page              { get; init; } = 1;
     public int       PageSize          { get; init; } = 20;
+
+    /// <summary>
+    /// Set by the authenticated tenders list only (see <c>TendersController</c>): restrict to
+    /// still-biddable tenders — bid deadline at least ~2 days out — so closed / closing-too-soon
+    /// tenders never appear. Guest <c>/explore</c> + SSR leave it false. Forwarded to
+    /// BiddingBuddyServices as <c>OnlyBiddable</c>.
+    /// </summary>
+    public bool OnlyBiddable { get; init; }
 }
 
 // ── Nested sub-objects ────────────────────────────────────────────────────────

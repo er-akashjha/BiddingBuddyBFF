@@ -20,7 +20,11 @@ public record TenderListItemDto(
     string? Platform = null,
     // "bid" | "reverse-auction" — what the portal listed, for the UI's kind badge. Resolved via
     // TenderKind so older tenders (stamped before source.bidKind existed) still report correctly.
-    string? BidKind = null
+    string? BidKind = null,
+    // When the crawler FIRST saw this tender (Mongo createdAt, preserved across re-scrapes) —
+    // powers the Tenders page's "Recently Crawled" sort and its NEW badge. Null on the
+    // Postgres-backed list path, which has no equivalent column.
+    DateTime? CrawledAt = null
 );
 
 public record TenderDetailDto(

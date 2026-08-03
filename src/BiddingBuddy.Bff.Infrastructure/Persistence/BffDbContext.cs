@@ -20,15 +20,39 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<OrgMember> OrgMembers => Set<OrgMember>();
     public DbSet<OrganizationInvite> OrganizationInvites => Set<OrganizationInvite>();
     public DbSet<OrgJoinRequest> OrgJoinRequests => Set<OrgJoinRequest>();
+    // An org asking the platform to become a buyer (able to publish tenders). Operator-approved.
+    // Migration 0033.
+    public DbSet<OrgBuyerRequest> OrgBuyerRequests => Set<OrgBuyerRequest>();
+    public DbSet<OrgSsoDomain> OrgSsoDomains => Set<OrgSsoDomain>();
 
     // Grants (GRANT product line). A global corpus like Tenders — no org_id; org-scoped grant
     // tables carry their own tenancy.
     public DbSet<GrantOpportunity> GrantOpportunities => Set<GrantOpportunity>();
 
+    // Grant pursuit lifecycle (org-scoped): saved grants, applications, and proposal artifacts.
+    public DbSet<SavedGrant> SavedGrants => Set<SavedGrant>();
+    public DbSet<GrantApplication> GrantApplications => Set<GrantApplication>();
+    public DbSet<GrantApplicationActivity> GrantApplicationActivities => Set<GrantApplicationActivity>();
+    public DbSet<GrantApplicationChecklistItem> GrantApplicationChecklistItems => Set<GrantApplicationChecklistItem>();
+    public DbSet<GrantNarrativeSection> GrantNarrativeSections => Set<GrantNarrativeSection>();
+    public DbSet<GrantBudgetLineItem> GrantBudgetLineItems => Set<GrantBudgetLineItem>();
+    public DbSet<GrantReview> GrantReviews => Set<GrantReview>();
+    public DbSet<GrantSubmission> GrantSubmissions => Set<GrantSubmission>();
+
     // Tenders
     public DbSet<Tender> Tenders => Set<Tender>();
     public DbSet<TenderDocument> TenderDocuments => Set<TenderDocument>();
     public DbSet<OrgTenderSettings> OrgTenderSettings => Set<OrgTenderSettings>();
+
+    // Buyer-side tendering (a department AUTHORS a tender here rather than us scraping one).
+    // Postgres owns the audit truth — drafts, hash-chained versions, corrigenda, audit events —
+    // while the published projection lives in Mongo like every other tender. Migration 0031.
+    public DbSet<TenderDraft> TenderDrafts => Set<TenderDraft>();
+    public DbSet<TenderVersion> TenderVersions => Set<TenderVersion>();
+    public DbSet<TenderOwnership> TenderOwnership => Set<TenderOwnership>();
+    public DbSet<TenderCommitteeMember> TenderCommitteeMembers => Set<TenderCommitteeMember>();
+    public DbSet<Corrigendum> Corrigenda => Set<Corrigendum>();
+    public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
 
     // Per-user saved tender filters (auto last-used snapshot + named views)
     public DbSet<UserSavedFilter> UserSavedFilters => Set<UserSavedFilter>();

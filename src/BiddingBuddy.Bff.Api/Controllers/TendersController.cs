@@ -23,7 +23,11 @@ public class TendersController(
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> List([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
     {
-        var result = await servicesClient.SearchTendersAsync(query, ct);
+        // The authenticated discovery list only shows still-biddable tenders (deadline at least
+        // ~2 days out); closed / closing-too-soon tenders are hidden for every sort. Forcing the
+        // flag here (rather than trusting the client) is what makes that a guarantee. Guest
+        // (PublicTendersController) and SSR paths don't set it, so they are unaffected.
+        var result = await servicesClient.SearchTendersAsync(query with { OnlyBiddable = true }, ct);
         return Ok(result);
     }
 
@@ -34,7 +38,8 @@ public class TendersController(
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ListPaged([FromQuery] TenderSearchQueryDto query, CancellationToken ct)
     {
-        var result = await servicesClient.SearchTendersPagedAsync(query, ct);
+        // See List above — the authenticated list is always scoped to still-biddable tenders.
+        var result = await servicesClient.SearchTendersPagedAsync(query with { OnlyBiddable = true }, ct);
         return Ok(result);
     }
 
