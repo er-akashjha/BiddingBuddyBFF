@@ -29,8 +29,31 @@ public class AnalysisController(
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetTenderAnalysis(Guid tenderId, CancellationToken ct)
     {
-        var verdict = await aiQuota.TryConsumeAsync(
-            CurrentOrgId, CurrentUserId, PlanFeatures.AiSummary, tenderId.ToString(), ct);
+        var resourceId = tenderId.ToString();
+
+        // Already unlocked this month → serve it without touching the meter. Checked first
+        // so a re-read stays free even when the quota is now exhausted.
+        var alreadyUnlocked = await aiQuota.IsUnlockedAsync(
+            CurrentOrgId, PlanFeatures.AiSummary, resourceId, ct);
+
+        // Fetch BEFORE consuming. This throws KeyNotFoundException → 404 for a tender that
+        // does not exist, and consuming first would bill a credit for that 404 — on the Free
+        // plan that is one of three for the month, spent on nothing. Any upstream failure
+        // has the same shape, so the credit must be the last thing we take, not the first.
+        var analysis = await analysisService.GetTenderAnalysisAsync(tenderId, CurrentOrgId, ct);
+
+        AiQuotaVerdict verdict;
+        if (alreadyUnlocked)
+        {
+            var (used, quota) = await aiQuota.GetUsageAsync(CurrentOrgId, PlanFeatures.AiSummary, ct);
+            verdict = new AiQuotaVerdict(Allowed: true, AlreadyUnlocked: true, used, quota);
+        }
+        else
+        {
+            verdict = await aiQuota.TryConsumeAsync(
+                CurrentOrgId, CurrentUserId, PlanFeatures.AiSummary, resourceId, ct);
+        }
+
         if (!verdict.Allowed)
         {
             var plan = await planService.GetPlanForAsync(CurrentOrgId, ct);
@@ -45,8 +68,6 @@ public class AnalysisController(
                 quota        = verdict.Quota,
             });
         }
-
-        var analysis = await analysisService.GetTenderAnalysisAsync(tenderId, CurrentOrgId, ct);
 
         // The eligibility verdict is a Growth+ feature even once unlocked.
         var effective = await planService.GetPlanForAsync(CurrentOrgId, ct);

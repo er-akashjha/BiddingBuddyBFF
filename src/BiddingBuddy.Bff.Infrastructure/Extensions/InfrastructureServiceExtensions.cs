@@ -138,6 +138,10 @@ public static class InfrastructureServiceExtensions
         services.Configure<WeeklyDigestOptions>(config.GetSection(WeeklyDigestOptions.Section));
 
         // ── Subscription billing ─────────────────────────────────────────────
+        // Seeds a new org's opening subscription. Registered before the services that
+        // depend on it; BOTH org-creation paths (onboarding form and password sign-up)
+        // call it, which is what keeps the trial promise true on every route in.
+        services.AddScoped<ISubscriptionSeeder, SubscriptionSeeder>();
         services.AddScoped<IPlanService, PlanService>();
         services.AddScoped<IAiQuotaService, AiQuotaService>();
         services.Configure<RazorpayOptions>(config.GetSection(RazorpayOptions.Section));

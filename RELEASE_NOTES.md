@@ -1,6 +1,36 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v46**
+Current version: **v47**
+
+---
+
+## v47 — 2026-08-04 08:45 IST
+
+**Two bugs found by exercising a running BFF, both of which passed every unit test.**
+
+**1. Password sign-up got no trial at all.** A workspace is born in two places: the onboarding
+form (`OrganizationService.CreateAsync`, which OAuth sign-ups reach) and
+`AuthService.CreateVerifiedAccountAsync`, which creates the org inline the moment a password
+sign-up confirms its e-mail OTP. Seeding lived only in the first, so **every password sign-up
+landed on Free with no trial** — the "14-day trial · no credit card" promise, made in three
+places on the marketing site, silently unkept for anyone not using a social provider. A fresh
+sign-up against the live BFF returned `planCode: "free", trialEndsAt: null`, which is how this
+surfaced. Seeding is now `ISubscriptionSeeder`, called by both paths.
+
+**2. A wasted AI credit on a 404.** `/api/analysis/tenders/{id}` consumed the credit *before*
+fetching, so a tender that does not exist (or any upstream failure) billed a credit and then
+returned 404. On Free that is one of three for the month, spent on nothing. The fetch now
+happens first and the credit is taken last — and an already-unlocked tender is checked before
+either, so a re-read stays free even once the quota is exhausted.
+
+Verified live against localhost:5124 with migration `0039` applied: `/api/public/plans` serves
+the corrected catalog; `/api/billing/summary` reports seats and AI usage; checkout 503s while
+Razorpay is unconfigured; the webhook 503s with no signature AND with a bogus one; competitors
+403s `UPGRADE_REQUIRED`; a second invite on a 1-seat plan 403s `SEAT_LIMIT_REACHED`; three
+distinct unlocks consume three credits, a repeat consumes none, and the fourth 403s. Promo
+`LAUNCH25` priced per plan: Starter ₹2,999→₹2,249, Growth ₹11,999→₹8,999, Pro ₹29,999→₹22,499.
+
+3 new tests (462 total, green).
 
 ---
 

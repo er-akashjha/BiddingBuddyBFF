@@ -20,6 +20,7 @@ public class OrganizationService(
     INotificationPublisher notifications,
     ITenderAlertRuleService alertRules,
     IPlanService planService,
+    ISubscriptionSeeder subscriptions,
     IConfiguration config,
     ILogger<OrganizationService> log) : IOrganizationService
 {
@@ -80,44 +81,11 @@ public class OrganizationService(
         await db.SaveChangesAsync(ct);
 
         await SeedStarterAlertRuleAsync(org.Id, ownerId, org.PrimaryCategory, ct);
-        await SeedSubscriptionAsync(org.Id, dto.StartPlan, ct);
+        await subscriptions.SeedAsync(org.Id, dto.StartPlan, ct);
 
         return await GetAsync(org.Id, ownerId, ct);
     }
 
-    /// <summary>
-    /// Gives the new workspace its opening subscription row: by default the 14-day Growth
-    /// trial the marketing site promises ("14-day trial · No credit card required"), or the
-    /// free plan when the signer-up explicitly chose Free on the pricing page.
-    ///
-    /// <para>The free case writes a real row rather than leaving the org row-less. Both
-    /// resolve to the same entitlements today, but only a row distinguishes "chose Free"
-    /// from "trial seeding failed" — which is the difference between leaving someone alone
-    /// and owing them a trial.</para>
-    ///
-    /// Failure is caught and logged, never fatal: an org with no subscription row resolves
-    /// to the free plan (PlanResolution), so the workspace works either way — losing the
-    /// trial is a support ticket, failing signup is a lost customer.
-    /// </summary>
-    private async Task SeedSubscriptionAsync(Guid orgId, string? startPlan, CancellationToken ct)
-    {
-        // SubscriptionSeedPolicy owns the rule (and its tests): only "free" is honored,
-        // anything else falls through to the trial, so this parameter can never be used
-        // to self-assign a paid plan.
-        var seed = SubscriptionSeedPolicy.For(startPlan, DateTime.UtcNow);
-
-        try
-        {
-            await db.Database.ExecuteSqlInterpolatedAsync($@"
-                INSERT INTO org_subscriptions (org_id, plan_code, status, trial_ends_at)
-                VALUES ({orgId}, {seed.PlanCode}, {seed.Status}, {seed.TrialEndsAt})
-                ON CONFLICT (org_id) DO NOTHING", ct);
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Could not seed the subscription for org {OrgId}; it defaults to the free plan.", orgId);
-        }
-    }
 
     /// <summary>
     /// Does an active organization already represent this company? Returns the 409 payload

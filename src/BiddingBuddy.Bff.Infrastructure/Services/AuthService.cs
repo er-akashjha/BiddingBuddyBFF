@@ -23,6 +23,7 @@ public class AuthService(
     IAppleTokenVerifier appleVerifier,
     TokenService tokenService,
     INotificationPublisher notifications,
+    ISubscriptionSeeder subscriptions,
     BffDbContext db,
     IConfiguration config,
     ILogger<AuthService> log) : IAuthService
@@ -226,6 +227,12 @@ public class AuthService(
                 JoinedAt = DateTime.UtcNow,
                 CreatedAt = DateTime.UtcNow,
             }, ct);
+
+            // Password sign-up creates the workspace right here, so it needs the trial
+            // seeded here too. Without this the whole password path landed on Free with
+            // no trial — the "14-day trial · no credit card" promise silently unkept for
+            // everyone who did not sign up through a social provider.
+            await subscriptions.SeedAsync(org.Id, startPlan: null, ct);
 
             orgNameForWelcome = org.Name;
         }
