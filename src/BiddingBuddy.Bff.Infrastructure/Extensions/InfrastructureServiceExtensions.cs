@@ -109,6 +109,9 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<ICompetitorService, CompetitorService>();
         services.AddScoped<IAnalysisService, AnalysisService>();
+        // Bid fit: who we are (capability profile) → what this tender demands → a cited verdict.
+        services.AddScoped<ICapabilityProfileService, CapabilityProfileService>();
+        services.AddScoped<ITenderFitService, TenderFitService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IDeviceService, DeviceService>();
         services.AddScoped<IGemIntegrationService, GemIntegrationService>();

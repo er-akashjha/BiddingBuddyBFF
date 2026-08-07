@@ -97,7 +97,8 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | Orders | `/api/orders` | CRUD, line items, delivery milestones |
 | Payments | `/api/payments` | EMD (bid deposits), invoices, payment summary |
 | Competitors | `/api/competitors` | List, detail, market summary |
-| Analysis | `/api/analysis` | Dashboard KPIs, recommendations, performance, market trends |
+| Analysis | `/api/analysis` | Dashboard KPIs, performance, market trends, **bid-fit verdict** (`/tenders/{id}/fit`, `/fit/existing`, `/fit/export`, `/fit/push-to-bid/{bidId}`) + `/ai-usage` — see Bid fit below |
+| **Capability** | `/api/capability` | The org's capability profile + credentials — the operand the fit engine evaluates a tender against. `profile` (GET/PUT), `credentials` (GET/POST/DELETE), `credential-suggestions` |
 | Notifications | `/api/notifications` | In-app inbox: list, mark read, channel preferences (backed by `user_notifications` since the rename — see Notification subsystem below) |
 | Integrations | `/api/integrations` | GeM portal config, sync trigger, sync status |
 | Tender alert rules | `/api/tender-alert-rules` | Client "interests" CRUD + `/settings` (digest size, channels, roles) — see Tender-match digests below |
@@ -109,7 +110,8 @@ subsystem (publisher inserts rows in Postgres then publishes thin triggers).
 | POST | `/internal/tenders` | Upsert enriched tender from BidProcessor (matching is decoupled — see Tender-match digests) |
 | POST | `/internal/tenders/{gemTenderId}/documents` | Store extracted document text |
 | POST | `/internal/competitors` | Record competitor bid observation |
-| POST | `/internal/analysis` | Store AI analysis results |
+| POST | `/internal/analysis` | ⚠️ **Dormant — no caller has ever existed.** Superseded by bid fit; scheduled for deletion with `ai_analysis_results` |
+| POST | `/internal/tender-fit` | BidProcessor's narrative callback. Writes ONLY the narrative columns of a `tender_fit_reports` row |
 | GET  | `/internal/migrations` | List embedded migration scripts + applied status |
 | POST | `/internal/migrations` | Apply all pending migrations (idempotent — see DbMigrator below) |
 | GET/POST/PATCH/DELETE | `/internal/notification-templates[/{id}]` | Admin CRUD over `notification_templates` (global config — see Notification subsystem) |
@@ -245,6 +247,7 @@ Key table groups:
 | Finance | `emd_deposits`, `invoices` |
 | Intelligence | `competitors`, `competitor_observations` |
 | Platform | `user_notifications`, `gem_integrations`, `analysis_results` |
+| Bid fit | `org_capability_profile` + `org_credentials` (`0040`); `tender_fit_reports` (`0041`). `ai_analysis_results` is superseded and dormant |
 | Notification dispatch | `notifications`, `notification_deliveries`, `notification_templates`, `notification_logs` |
 | Tender-match digests | `tender_alert_rules`, `org_alert_settings`, `tender_matches` (migration `0004`) |
 | Buyer-side tendering | `tender_drafts`, `tender_versions`, `tender_ownership`, `corrigenda`, `audit_events`, `tender_committee_members` (migration `0031`) · `org_buyer_requests` (buyer-access requests, `0033`) |
@@ -632,6 +635,73 @@ UNIQUE(org,tender) (DB guard). Concurrent runs are gated by an in-process semaph
 - **Services:** `ITenderAlertRuleService` (CRUD + settings), `IMatchingService` (`ScanNewTendersAsync` scheduled scan + `FlushAllDueAsync` legacy fallback). Worker: `TenderMatchScanWorker` (config `Matching:*`). UI: SettingsPage → **Interests** tab.
 - **Starter rule from onboarding:** `OrganizationService.SeedStarterAlertRuleAsync` turns the sector picked at onboarding (`organizations.primary_category`) into one category-only rule — on create, and on the PATCH that first sets the sector. Idempotent: skipped if the org already owns any rule, so editing interests or re-running onboarding never duplicates it (the table has no unique constraint). Failure is caught and logged; it never fails org creation. This only works because the picker emits the **canonical taxonomy verbatim** — matching is exact, so a free-form sector would match nothing forever.
 - **Go-live:** apply migrations `0004` + `0008`; the scan runs in-process via `TenderMatchScanWorker` — no external cron required (or drive `POST /internal/matching/scan` instead). `0008` marks all existing tenders scanned so the first run won't blast the backlog; use `?backfill=true` for a deliberate one-time backfill. Ensure BidProcessor `BffInternalApi:ApiKey` matches `Pipeline:ApiKey` so tenders actually reach Postgres to be matched.
+
+## Bid fit — the paid AI analysis
+
+Answers **"can THIS org bid THIS tender, and what will it tie up"**. Migrations `0040` + `0041`.
+Plan: `docs/ai-analysis/PLAN.md`.
+
+### Why it exists
+
+The enrichment pipeline computes **one artifact per tender, globally** — the same text for every
+customer. That is right for "what does this tender demand" and structurally incapable of answering
+"can *we* bid it". `tenders.eligibility_score` and `win_probability` are columns whose only writer
+(BidProcessor's `BffTenderClient`) sets them to a literal null, and `ai_analysis_results` has never
+had a caller — so `/api/analysis/tenders/{id}` spent a credit and returned null on every request
+since it shipped, while the SPA painted hardcoded filler over the hole.
+
+### The shape
+
+```
+Mongo (Services)          ┌─────────────────────────────────────────┐
+tenders.qualification ────┤ Core/Fit/TenderFitRules.Evaluate(…)     │  instant · free · cited
+tenders.financial         │   → FitVerdict + FitFinding[]           │  versioned · deterministic
+tenders.commercial        │   Never fails. Never invents.           │
+                          └────────────────┬────────────────────────┘
+Postgres (BFF)                             │  the verdict is decided HERE
+org_capability_profile ───┐                ▼
+org_credentials           │  BFF → tender.fit-narrative (Rabbit)
+bids (derived history)    │      → BidProcessor TenderFitNarrativeWorker
+                          │      → POST /internal/tender-fit          ← prose ONLY
+                          └─────────────────────────────────────────
+```
+
+**The rules engine lives in the BFF** because every operand does, and because it is the same shape
+as `TenderComplianceRules` — versioned (`2026.08.1`), every finding carrying the citation of the
+instrument behind it. **The LLM lives in BidProcessor** because that project already owns the
+providers, the 429 fallback chain and the cost telemetry; a second client here would fork both.
+
+### Invariants
+
+- **No model decides a verdict.** Eligibility is arithmetic. If every provider is down, the
+  customer's report is unaffected — they lose a paragraph, not the product.
+- **Never a percentage.** `insufficient_data` is a first-class outcome. Against an empty profile,
+  "no blockers found" means "we didn't look", and rendering that as a green light is the exact
+  failure this replaced.
+- **`FitFinding` requires `Source` and `Confidence`**, and the client renders both. Honesty is
+  enforced by the type, not by reviewer discipline.
+- **Relaxations before thresholds.** MSE / DIPP-startup relaxations are checked *before* the raw
+  turnover or experience comparison — reporting a blocker an MSE is statutorily exempt from pushes
+  a customer off a bid they are entitled to make. Self-asserted, so those findings are low
+  confidence and tell the bidder to carry the certificate.
+- **A line we cannot compute is omitted, never estimated.** `BidCostEstimator` prints no
+  "typical document prep" figure; blocked capital and money-owed-on-win are separated.
+- **Charge on a real verdict only.** Free: re-reads, an already-unlocked tender (shared usage key
+  with the tender-detail unlock — neither surface double-charges), `insufficient_data`, and a
+  corrigendum re-run. `IAiQuotaService.RefundAsync` gives the credit back if the persist fails.
+
+### Gotchas
+
+- **`tender_document_content` is purged aggressively** (two prod purges, ~26,990 rows left, one
+  ordered by a random-GUID `_id`). So `EvidenceQuote` is usually null and every rule runs off the
+  **structured** extraction, which is durable. Do not build a rule that assumes document text.
+- **A tender readable from Mongo may not be mirrored in Postgres.** `tender_fit_reports` FKs to
+  `tenders`, so persistence is best-effort — the verdict is still returned, just uncached.
+- **`tender.fit-narrative` exists only because a worker subscribes.** An unroutable message on the
+  default exchange is silently discarded, so BidProcessor v17 must ship first or alongside.
+- **Bump `TenderFitRules.Version` whenever a threshold, severity, relaxation or citation changes.**
+  A stored report is re-run rather than re-rendered on a mismatch; skipping the bump means a
+  historical verdict is silently restated under rules it was never computed under.
 
 ## Buyer-side tendering
 

@@ -1,6 +1,82 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v47**
+Current version: **v48**
+
+---
+
+## v48 — 2026-08-05 22:15 IST
+
+**Bid fit: the AI analysis tab now answers "can WE bid this?" instead of describing the tender.**
+Migrations `0040` + `0041`. Requires ui v42; BidProcessor v17 supplies the optional narrative.
+
+### The defect this closes
+
+`ai_analysis_results` has an entity, a configuration, a DTO, an upsert
+(`InternalPipelineService.UpsertAiAnalysisAsync`) and an endpoint (`POST /internal/analysis`).
+**Nothing has ever called it.** So `GetTenderAnalysisAsync` returned null for every tender that has
+ever existed, `AnalysisController` consumed a credit and returned `analysis: null`, and the SPA
+rendered hardcoded fallbacks over the hole — an expired ISO 27001, a ₹3.5Cr turnover, an OEM letter
+pending with Dell. Those are specific, confident, actionable claims about a company that is not the
+customer's, sold at one of three monthly credits on the Free plan.
+
+The root cause was structural, not a missing writer: the pipeline computes ONE enrichment per
+tender, globally, so nothing in it knows who is asking. `tenders.eligibility_score` and
+`win_probability` are columns whose only writer (BidProcessor `BffTenderClient.cs:103-104`) sets
+them to a literal null.
+
+### What replaces it
+
+- **`Core/Fit/TenderFitRules.cs`** — deterministic, versioned (`2026.08.1`), cited. Eligibility is
+  arithmetic: turnover vs threshold, certificate expiry vs bid deadline, EMD vs headroom, ePBG vs
+  BG line, reach, category, RA/splitting/preferences. No model decides a verdict, so the feature
+  still works when a provider is down and every finding can be pointed at the two values behind it.
+- **Verdict is `go | go_with_gaps | blocked | insufficient_data`** — never a percentage.
+  `insufficient_data` is a first-class outcome: against an empty profile, "no blockers found" means
+  "we didn't look", and rendering that as a green light is the failure this design exists to prevent.
+- **`FitFinding` requires `Source` and `Confidence`**, both rendered. A model's inference cannot be
+  made to look like a subtraction over two known numbers. Honesty is enforced by the type, not by
+  reviewer discipline.
+- **Statutory relaxations are applied BEFORE the raw threshold** (MSE Order 2012, DIPP startup, MSE
+  EMD exemption), each carrying its citation. Reporting a blocker an MSE is statutorily exempt from
+  would push a customer off a bid they are entitled to make.
+- **`Core/Fit/BidCostEstimator.cs`** — rupee cost to bid, every line read off the tender's own
+  fields. A line we cannot compute is OMITTED, never estimated. Blocked capital and money owed on
+  win are separated: conflating them overstates the cost of bidding by an order of magnitude.
+
+### Metering, corrected
+
+- `AnalysisController` no longer charges when there is nothing to return (`charged: false`), and
+  `TendersController` no longer charges an unlock on a tender with no AI behind the paywall.
+- A credit is taken only when a real verdict is newly produced. Free: re-reads, a tender already
+  unlocked this month (shared usage key with the tender detail), `insufficient_data`, and a re-run
+  forced by a corrigendum — **the customer must not pay because the buyer amended the notice**.
+- `IAiQuotaService.RefundAsync` — the meter is taken before the report is written, so a failed
+  persist hands the credit back rather than billing the customer for our outage.
+- `GET /api/analysis/ai-usage` — read the meter without spending it, so the price of a click is
+  visible before the click.
+
+### New surface
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/analysis/tenders/{id}/fit` | The verdict. `?rerun=true` recomputes. |
+| `GET /api/analysis/tenders/{id}/fit/existing` | Stored verdict only — never computes, never meters. |
+| `GET /api/analysis/tenders/{id}/fit/export` | .docx bid/no-bid note (OpenXML, already a dependency). |
+| `POST /api/analysis/tenders/{id}/fit/push-to-bid/{bidId}` | Blockers + gaps into `bid_checklists`, idempotent on title. |
+| `GET/PUT /api/capability/profile` | The org capability profile. PUT not PATCH — a turnover you can't erase becomes a stale one the engine treats as fact. |
+| `GET/POST/DELETE /api/capability/credentials` | Certificates, OEM letters, registrations. Upserts on (kind, code). |
+| `GET /api/capability/credential-suggestions` | Inferred from the document vault. Read-only — nothing is recorded until the user accepts. |
+| `POST /internal/tender-fit` | BidProcessor's narrative callback. Writes ONLY the narrative columns. |
+
+### Notes
+
+- **`0039` is still unapplied.** These sit on top of it — apply `0039`, `0040`, `0041` in order, or
+  `PlanService` resolves every org to the free tier and the quotas are wrong.
+- `ai_analysis_results` and `POST /internal/analysis` are left dormant for one release, then dropped.
+- Publishes to `tender.fit-narrative`; that queue exists only because BidProcessor v17 subscribes.
+  An unroutable message on the default exchange is silently DISCARDED, so the worker must ship
+  first or alongside. A publish failure is logged and swallowed — the report stands without prose.
+- 504 tests green (19 new: fit engine + credential matcher).
 
 ---
 

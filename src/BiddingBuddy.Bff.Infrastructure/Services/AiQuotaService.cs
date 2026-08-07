@@ -66,6 +66,19 @@ public class AiQuotaService(BffDbContext db, IPlanService planService) : IAiQuot
                         && r.ResourceId == resourceId && r.PeriodMonth == month, ct);
     }
 
+    public async Task<bool> RefundAsync(
+        Guid orgId, string feature, string resourceId, CancellationToken ct = default)
+    {
+        var month = CurrentPeriodMonth();
+        // Scoped to the CURRENT month only: refunding into a closed month would hand back a
+        // credit the customer can no longer spend and quietly corrupt that month's usage record.
+        var deleted = await db.Database.ExecuteSqlInterpolatedAsync($@"
+            DELETE FROM ai_usage_records
+            WHERE org_id = {orgId} AND feature = {feature}
+              AND resource_id = {resourceId} AND period_month = {month}", ct);
+        return deleted > 0;
+    }
+
     internal static DateOnly CurrentPeriodMonth()
     {
         var ist = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Ist);

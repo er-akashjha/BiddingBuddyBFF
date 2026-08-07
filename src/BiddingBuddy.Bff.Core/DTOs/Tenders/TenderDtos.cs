@@ -138,11 +138,18 @@ public record AiAnalysisResultDto(
 public record AiUsageDto(int Used, int? Quota);
 
 /// <summary>
-/// Response of the deliberate "view AI analysis" action. <c>Analysis</c> is null when the
-/// credit was consumed but no extended analysis row exists — the unlock itself still
-/// reveals the tender's inline AI fields (shared usage key with the tender detail).
+/// Response of the deliberate "view AI analysis" action.
+///
+/// <para><c>Analysis</c> is null when we have nothing to show for this tender. That case does
+/// NOT spend a credit — <c>Charged</c> reports whether the meter moved, so the client can say
+/// "no analysis available yet" without the customer having paid for the sentence. Re-viewing a
+/// tender already unlocked this month is also uncharged (shared usage key with the tender
+/// detail, so neither surface double-charges).</para>
 /// </summary>
-public record TenderAnalysisResponseDto(AiAnalysisResultDto? Analysis, AiUsageDto AiUsage);
+public record TenderAnalysisResponseDto(
+    AiAnalysisResultDto? Analysis,
+    AiUsageDto AiUsage,
+    bool Charged = false);
 
 public record SaveTenderDto(string? Notes, string[]? Tags, int? CustomScore);
 

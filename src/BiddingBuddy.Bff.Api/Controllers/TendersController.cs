@@ -103,7 +103,15 @@ public class TendersController(
         var wantsUnlock = unlockAi || plan.AiSummariesPerMonth is null;
 
         bool unlocked;
-        if (wantsUnlock)
+        if (wantsUnlock && !HasAnyAi(tender))
+        {
+            // Nothing behind the paywall for this tender — the pipeline never enriched it, or
+            // enriched it to nothing. Unmask (there is nothing to hide) without spending a
+            // credit. Charging here sells an empty screen.
+            unlocked = await aiQuota.IsUnlockedAsync(
+                CurrentOrgId, PlanFeatures.AiSummary, id.ToString(), ct);
+        }
+        else if (wantsUnlock)
         {
             var verdict = await aiQuota.TryConsumeAsync(
                 CurrentOrgId, CurrentUserId, PlanFeatures.AiSummary, id.ToString(), ct);
@@ -140,6 +148,18 @@ public class TendersController(
 
         return Ok(tender);
     }
+
+    /// <summary>
+    /// Is there anything behind the paywall for this tender? AiScore is excluded deliberately —
+    /// it is the teaser shown on every plan, so a tender carrying only a score has nothing an
+    /// unlock would reveal.
+    /// </summary>
+    private static bool HasAnyAi(TenderDetailDto t) =>
+        !string.IsNullOrWhiteSpace(t.AiSummary)
+        || t.AiTags is { Length: > 0 }
+        || t.RiskScore is not null
+        || t.EligibilityScore is not null
+        || t.AiAnalysis is not null;
 
     /// <summary>AiScore stays as the teaser on every plan; everything else AI is nulled.</summary>
     private static TenderDetailDto MaskAi(TenderDetailDto t) => t with

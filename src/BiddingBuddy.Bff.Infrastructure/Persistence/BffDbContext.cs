@@ -97,6 +97,14 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<AiAnalysisResult> AiAnalysisResults => Set<AiAnalysisResult>();
     public DbSet<OrgPerformanceSnapshot> OrgPerformanceSnapshots => Set<OrgPerformanceSnapshot>();
 
+    // Bid-fit: what the org can do (0040) + the per-org verdict on a tender (0041).
+    // The capability profile is the operand every "can we bid this?" question was missing —
+    // the pipeline's enrichment is global, so eligibility could never have been answered
+    // from it alone.
+    public DbSet<OrgCapabilityProfile> OrgCapabilityProfiles => Set<OrgCapabilityProfile>();
+    public DbSet<OrgCredential> OrgCredentials => Set<OrgCredential>();
+    public DbSet<TenderFitReport> TenderFitReports => Set<TenderFitReport>();
+
     // In-app notification inbox (was Notifications; renamed to free the name
     // for the dispatch-event table below)
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
