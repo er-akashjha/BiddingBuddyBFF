@@ -12,6 +12,7 @@ namespace BiddingBuddy.Bff.Infrastructure.Services;
 public class MatchingService(
     BffDbContext db,
     INotificationPublisher publisher,
+    IPlanService planService,
     IConfiguration config,
     ILogger<MatchingService> log) : IMatchingService
 {
@@ -210,7 +211,14 @@ public class MatchingService(
         var settings = await db.OrgAlertSettings.FirstOrDefaultAsync(s => s.OrgId == orgId, ct);
         if (settings is { IsEnabled: false }) return false;
 
-        var interval = TimeSpan.FromMinutes(settings?.MinSendIntervalMinutes ?? DefaultMinIntervalMinutes);
+        // Plan floor applied at READ time (Free = weekly, Starter = daily, Growth+ =
+        // real-time): a downgrade never rewrites the org's stored preference, it just
+        // stops being honored until they upgrade again.
+        var plan = await planService.GetPlanForAsync(orgId, ct);
+        var effectiveMinutes = Math.Max(
+            settings?.MinSendIntervalMinutes ?? DefaultMinIntervalMinutes,
+            plan.AlertFloorMinutes);
+        var interval = TimeSpan.FromMinutes(effectiveMinutes);
 
         // Pending matches joined to their tender — ordered for delivery by soonest
         // deadline below.

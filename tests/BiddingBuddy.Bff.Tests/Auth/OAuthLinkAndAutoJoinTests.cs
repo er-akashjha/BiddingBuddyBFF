@@ -81,6 +81,7 @@ public sealed class OAuthLinkAndAutoJoinTests
             Mock.Of<IAppleTokenVerifier>(),
             new TokenService(JwtConfig()),
             Mock.Of<INotificationPublisher>(),
+            new TestSupport.StubSubscriptionSeeder(),
             db,
             JwtConfig(),
             NullLogger<AuthService>.Instance);

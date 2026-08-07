@@ -1,12 +1,14 @@
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.SavedFilters;
 using BiddingBuddy.Bff.Core.Entities;
+using BiddingBuddy.Bff.Core.Exceptions;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace BiddingBuddy.Bff.Infrastructure.Services;
 
-public class SavedFilterService(BffDbContext db) : ISavedFilterService
+public class SavedFilterService(BffDbContext db, IPlanService planService) : ISavedFilterService
 {
     // Cap named views so a user can't balloon the table.
     private const int MaxNamedViews = 50;
@@ -60,6 +62,15 @@ public class SavedFilterService(BffDbContext db) : ISavedFilterService
             .CountAsync(f => f.OrgId == orgId && f.UserId == userId && f.Kind == SavedFilterKinds.Named, ct);
         if (count >= MaxNamedViews)
             throw new InvalidOperationException($"You can save at most {MaxNamedViews} views.");
+
+        // Plan cap (Free = 1). Existing views survive a downgrade; only creation is gated.
+        var plan = await planService.GetPlanForAsync(orgId, ct);
+        if (plan.SavedFilterCap is { } cap && count >= cap)
+            throw new PlanLimitException(PlanLimitException.UpgradeRequired,
+                $"Your plan includes {cap} saved view{(cap == 1 ? "" : "s")}. Upgrade for unlimited saved views.",
+                PlanFeatures.SavedFilters,
+                requiredPlan: PlanCatalog.NextPlanUp(plan.PlanCode), currentPlan: plan.PlanCode,
+                used: count, limit: cap);
 
         var row = new UserSavedFilter
         {

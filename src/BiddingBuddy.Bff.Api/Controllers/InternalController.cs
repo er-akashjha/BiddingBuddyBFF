@@ -1,5 +1,6 @@
 using BiddingBuddy.Bff.Api.Filters;
 using BiddingBuddy.Bff.Core.DTOs.Internal;
+using BiddingBuddy.Bff.Core.Entities;
 using BiddingBuddy.Bff.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,7 +14,9 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [Route("internal")]
 [PipelineApiKey]
 [Produces("application/json")]
-public class InternalController(IInternalPipelineService pipelineService) : ControllerBase
+public class InternalController(
+    IInternalPipelineService pipelineService,
+    ITenderFitService tenderFit) : ControllerBase
 {
     /// <summary>Upsert a tender from pipeline enrichment. Returns 201 on create, 200 on update.</summary>
     [HttpPost("tenders")]
@@ -84,6 +87,34 @@ public class InternalController(IInternalPipelineService pipelineService) : Cont
     public async Task<IActionResult> UpsertAnalysis([FromBody] UpsertAiAnalysisDto dto, CancellationToken ct)
     {
         await pipelineService.UpsertAiAnalysisAsync(dto, ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// The BidProcessor's callback carrying the LLM narrative for a bid-fit report (or the reason
+    /// it failed). Always 204 — a report that has since been deleted is not an error the worker
+    /// can act on, and 4xx-ing it would dead-letter a message that can never succeed.
+    ///
+    /// <para>This writes ONLY the narrative columns. The verdict and findings were decided by the
+    /// BFF's own deterministic rules engine and are not the pipeline's to revise.</para>
+    /// </summary>
+    [HttpPost("tender-fit")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> SetTenderFitNarrative(
+        [FromBody] SetFitNarrativeDto dto, CancellationToken ct)
+    {
+        if (!NarrativeStates.All.Contains(dto.State))
+            return BadRequest(new
+            {
+                error = $"Unknown narrative state '{dto.State}'.",
+                code  = "INVALID_STATE",
+                expected = NarrativeStates.All,
+            });
+
+        await tenderFit.SetNarrativeAsync(
+            dto.OrgId, dto.TenderId, dto.Narrative, dto.Model, dto.State, dto.Error, ct);
         return NoContent();
     }
 }

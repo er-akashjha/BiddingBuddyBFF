@@ -1,6 +1,8 @@
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.DTOs.Orgs;
 using BiddingBuddy.Bff.Core.Entities;
+using BiddingBuddy.Bff.Core.Exceptions;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +14,7 @@ namespace BiddingBuddy.Bff.Infrastructure.Services;
 public class JoinRequestService(
     BffDbContext db,
     INotificationPublisher notifications,
+    IPlanService planService,
     IConfiguration config,
     ILogger<JoinRequestService> log) : IJoinRequestService
 {
@@ -121,6 +124,18 @@ public class JoinRequestService(
             throw new InvalidOperationException("INVALID_ROLE");
 
         var request = await LoadPendingAsync(orgId, requestId, ct);
+
+        // Seat gate: approving adds an active member. Active members only — a join
+        // request holds no reservation the way a pending invite does.
+        var plan = await planService.GetPlanForAsync(orgId, ct);
+        var seatsUsed = await db.OrgMembers.CountAsync(m => m.OrgId == orgId && m.Status == "active", ct);
+        if (seatsUsed >= plan.SeatCap)
+            throw new PlanLimitException(PlanLimitException.SeatLimitReached,
+                $"Your plan includes {plan.SeatCap} seat{(plan.SeatCap == 1 ? "" : "s")} and all are in use. Upgrade to approve this request.",
+                PlanFeatures.Seats,
+                requiredPlan: PlanCatalog.NextPlanUp(plan.PlanCode),
+                currentPlan: plan.PlanCode,
+                used: seatsUsed, limit: plan.SeatCap);
 
         // Same shape as accepting an invite: reactivate a suspended membership rather than
         // inserting a second row, which the UNIQUE (org_id, user_id) index would reject.

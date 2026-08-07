@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using BCrypt.Net;
 using BiddingBuddy.Bff.Core.Authorization;
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.Auth;
 using BiddingBuddy.Bff.Core.DTOs.Notifications;
 using BiddingBuddy.Bff.Core.Entities;
@@ -22,6 +23,7 @@ public class AuthService(
     IAppleTokenVerifier appleVerifier,
     TokenService tokenService,
     INotificationPublisher notifications,
+    ISubscriptionSeeder subscriptions,
     BffDbContext db,
     IConfiguration config,
     ILogger<AuthService> log) : IAuthService
@@ -225,6 +227,12 @@ public class AuthService(
                 JoinedAt = DateTime.UtcNow,
                 CreatedAt = DateTime.UtcNow,
             }, ct);
+
+            // Password sign-up creates the workspace right here, so it needs the trial
+            // seeded here too. Without this the whole password path landed on Free with
+            // no trial — the "14-day trial · no credit card" promise silently unkept for
+            // everyone who did not sign up through a social provider.
+            await subscriptions.SeedAsync(org.Id, startPlan: null, ct);
 
             orgNameForWelcome = org.Name;
         }
@@ -828,13 +836,25 @@ public class AuthService(
     private async Task<IReadOnlyList<UserOrgDto>> BuildOrgDtosAsync(
         IReadOnlyList<Organization> orgs, Guid userId, CancellationToken ct)
     {
+        // One batched query, then the same date-driven resolution PlanService uses for
+        // gates — /me and a 403 UPGRADE_REQUIRED must never disagree about the plan.
+        var orgIds = orgs.Select(o => o.Id).ToList();
+        var subs = await db.OrgSubscriptions.AsNoTracking()
+            .Where(s => orgIds.Contains(s.OrgId))
+            .ToDictionaryAsync(s => s.OrgId, ct);
+        var now = DateTime.UtcNow;
+
         var result = new List<UserOrgDto>();
         foreach (var org in orgs)
         {
             var role = await orgRepo.GetUserRoleAsync(org.Id, userId, ct) ?? "viewer";
+            subs.TryGetValue(org.Id, out var sub);
+            var (planCode, planStatus) = PlanResolution.Resolve(
+                sub?.PlanCode, sub?.Status, sub?.TrialEndsAt, sub?.CurrentPeriodEnd, now);
             result.Add(new UserOrgDto(
                 org.Id, org.Name, org.Slug, role, org.LogoUrl, org.IsActive, org.PrimaryCategory,
-                org.GemSellerName, org.OrgType));
+                org.GemSellerName, org.OrgType,
+                planCode, planStatus, sub?.TrialEndsAt, sub?.CurrentPeriodEnd));
         }
         return result;
     }

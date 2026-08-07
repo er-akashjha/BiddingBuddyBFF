@@ -32,6 +32,8 @@ public sealed class SetOrgTypeTests
             Mock.Of<IUserRepository>(),
             Mock.Of<INotificationPublisher>(),
             new TenderAlertRuleService(db),
+            new TestSupport.StubPlanService(),
+            new TestSupport.StubSubscriptionSeeder(),
             new ConfigurationBuilder().Build(),
             NullLogger<OrganizationService>.Instance);
 

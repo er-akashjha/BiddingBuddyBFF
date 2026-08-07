@@ -20,7 +20,11 @@ public class OrgContextMiddleware(RequestDelegate next)
     // buyer-access queue has no single X-Org-Id to scope to. It is not left ungated: every route
     // under it is [PlatformAdmin], a database-checked flag, so membership is simply the wrong
     // question there.
-    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/api/join-requests", "/api/devices", "/api/admin", "/internal", "/swagger", "/health", "/sitemap"];
+    // /api/webhooks is exempt because the caller is a payment provider's server, not a
+    // user: there is no JWT and no X-Org-Id to send. It is not ungated — the Razorpay
+    // webhook authenticates with a constant-time HMAC over the raw body and fails closed
+    // when its secret is unset.
+    private static readonly string[] SkipPrefixes = ["/api/auth", "/api/public", "/api/invites", "/api/join-requests", "/api/devices", "/api/admin", "/api/webhooks", "/internal", "/swagger", "/health", "/sitemap"];
 
     public async Task InvokeAsync(HttpContext ctx, IOrganizationRepository orgRepo)
     {

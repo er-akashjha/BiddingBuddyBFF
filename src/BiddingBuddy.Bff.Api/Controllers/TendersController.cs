@@ -1,3 +1,5 @@
+using BiddingBuddy.Bff.Api.Filters;
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.Tenders;
 using BiddingBuddy.Bff.Core.Interfaces;
 using BiddingBuddy.Bff.Infrastructure.Services;
@@ -14,7 +16,9 @@ public class TendersController(
     ITenderService tenderService,
     IBiddingBuddyServicesClient servicesClient,
     IOrganizationService organizations,
-    ITenderFileStorage tenderFileStorage) : BffControllerBase
+    ITenderFileStorage tenderFileStorage,
+    IAiQuotaService aiQuota,
+    IPlanService planService) : BffControllerBase
 {
     /// <summary>Tender list from BiddingBuddyServices (MongoDB). Only provided filters are forwarded.</summary>
     [HttpGet]
@@ -75,16 +79,99 @@ public class TendersController(
         return Ok(values);
     }
 
-    /// <summary>Full tender detail by ID from BiddingBuddyServices.</summary>
+    /// <summary>
+    /// Full tender detail by ID from BiddingBuddyServices. AI fields are masked
+    /// (<c>aiLocked: true</c>) until the org unlocks this tender for the current month —
+    /// pass <c>unlockAi=true</c> to consume one monthly AI credit and unmask (the same
+    /// usage key as <c>/api/analysis/tenders/{id}</c>, so neither double-charges).
+    /// Unlimited-AI plans auto-unlock on view. Quota exhausted → 403 UPGRADE_REQUIRED.
+    /// </summary>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(typeof(TenderDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
-    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct, [FromQuery] bool unlockAi = false)
     {
         var tender = await servicesClient.GetTenderAsync(id.ToString(), ct);
+        if (tender is null) return Ok(tender);
+
+        var plan = await planService.GetPlanForAsync(CurrentOrgId, ct);
+
+        // Unlimited plans never ration, so masking every tender behind a click would be
+        // pure friction — auto-unlock (usage is still recorded for fair-use monitoring).
+        var wantsUnlock = unlockAi || plan.AiSummariesPerMonth is null;
+
+        bool unlocked;
+        if (wantsUnlock && !HasAnyAi(tender))
+        {
+            // Nothing behind the paywall for this tender — the pipeline never enriched it, or
+            // enriched it to nothing. Unmask (there is nothing to hide) without spending a
+            // credit. Charging here sells an empty screen.
+            unlocked = await aiQuota.IsUnlockedAsync(
+                CurrentOrgId, PlanFeatures.AiSummary, id.ToString(), ct);
+        }
+        else if (wantsUnlock)
+        {
+            var verdict = await aiQuota.TryConsumeAsync(
+                CurrentOrgId, CurrentUserId, PlanFeatures.AiSummary, id.ToString(), ct);
+            if (!verdict.Allowed)
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error        = "You've used all AI summaries included in your plan this month.",
+                    code         = "UPGRADE_REQUIRED",
+                    feature      = PlanFeatures.AiSummary,
+                    requiredPlan = PlanCatalog.NextPlanUp(plan.PlanCode),
+                    currentPlan  = plan.PlanCode,
+                    used         = verdict.Used,
+                    quota        = verdict.Quota,
+                });
+            unlocked = true;
+        }
+        else
+        {
+            unlocked = await aiQuota.IsUnlockedAsync(
+                CurrentOrgId, PlanFeatures.AiSummary, id.ToString(), ct);
+        }
+
+        if (!unlocked) return Ok(MaskAi(tender));
+
+        // The eligibility verdict is a Growth+ feature even once unlocked.
+        if (!plan.HasFeature(PlanFeatures.EligibilityCheck))
+            tender = tender with
+            {
+                EligibilityScore = null,
+                AiAnalysis = tender.AiAnalysis is null
+                    ? null
+                    : tender.AiAnalysis with { EligibilityBreakdown = null },
+            };
+
         return Ok(tender);
     }
+
+    /// <summary>
+    /// Is there anything behind the paywall for this tender? AiScore is excluded deliberately —
+    /// it is the teaser shown on every plan, so a tender carrying only a score has nothing an
+    /// unlock would reveal.
+    /// </summary>
+    private static bool HasAnyAi(TenderDetailDto t) =>
+        !string.IsNullOrWhiteSpace(t.AiSummary)
+        || t.AiTags is { Length: > 0 }
+        || t.RiskScore is not null
+        || t.EligibilityScore is not null
+        || t.AiAnalysis is not null;
+
+    /// <summary>AiScore stays as the teaser on every plan; everything else AI is nulled.</summary>
+    private static TenderDetailDto MaskAi(TenderDetailDto t) => t with
+    {
+        EligibilityScore = null,
+        RiskScore        = null,
+        WinProbability   = null,
+        AiSummary        = null,
+        AiTags           = null,
+        AiAnalysis       = null,
+        AiLocked         = true,
+    };
 
     /// <summary>
     /// Generate a short-lived presigned URL for a scraped tender document (PDF) in S3.
@@ -127,7 +214,9 @@ public class TendersController(
     /// the platform + platform-tender-id off the raw tender first.
     /// </summary>
     [HttpGet("{id:guid}/result")]
+    [RequirePlanFeature(PlanFeatures.Competitors)]   // result/award history is the Growth+ pitch
     [ProducesResponseType(typeof(TenderResultViewDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> GetResult(Guid id, CancellationToken ct)

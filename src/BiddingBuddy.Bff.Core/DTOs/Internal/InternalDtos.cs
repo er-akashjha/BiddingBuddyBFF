@@ -121,3 +121,22 @@ public record AwardBidderDto(
     bool IsMse = false,
     bool UnderPma = false
 );
+
+/// <summary>
+/// The BidProcessor's callback carrying the LLM narrative for a bid-fit report, or the reason it
+/// could not be written.
+///
+/// <para>Deliberately narrow: it can set the narrative columns and nothing else. The verdict and
+/// the findings were decided by this service's own deterministic rules engine, and a pipeline
+/// that could overwrite them would put the one number a customer commits capital against behind
+/// an API key.</para>
+/// </summary>
+/// <param name="State">pending | ready | failed | skipped — validated at the endpoint.</param>
+public record SetFitNarrativeDto(
+    Guid OrgId,
+    Guid TenderId,
+    string? Narrative,
+    string? Model,
+    string State,
+    string? Error
+);

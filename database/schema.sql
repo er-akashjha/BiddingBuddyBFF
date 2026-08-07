@@ -1178,3 +1178,220 @@ CREATE INDEX ix_buyer_requests_org    ON org_buyer_requests (org_id, created_at 
 -- 0033 also seeds notification templates: BUYER_REQUEST_SUBMITTED (Email â†’ a configured ops
 -- address, not a user), BUYER_REQUEST_APPROVED and BUYER_REQUEST_REJECTED (Email + InApp â†’ org).
 
+
+-- ============================================================================
+-- 0039: SaaS subscription billing (plan state, Razorpay payments, AI metering,
+-- promo codes). The plan CATALOG (prices/quotas/features) is code —
+-- Core/Billing/PlanCatalog.cs — these tables hold per-org STATE only.
+-- billing_* naming avoids the tender-domain orders/invoices/emd_payments.
+-- ============================================================================
+
+CREATE TABLE org_subscriptions (
+  id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id                    UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE UNIQUE,
+  plan_code                 TEXT NOT NULL DEFAULT 'free',
+  status                    TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('trialing','active','past_due','expired','canceled')),
+  trial_ends_at             TIMESTAMPTZ,
+  current_period_start      TIMESTAMPTZ,
+  current_period_end        TIMESTAMPTZ,
+  trial_ending_notified_at  TIMESTAMPTZ,
+  renewal_t14_notified_at   TIMESTAMPTZ,
+  renewal_t3_notified_at    TIMESTAMPTZ,
+  expiry_notified_at        TIMESTAMPTZ,
+  provider                  TEXT NOT NULL DEFAULT 'razorpay',
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ
+);
+
+CREATE TABLE promo_codes (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code             TEXT NOT NULL UNIQUE,          -- stored uppercase
+  description      TEXT,
+  discount_type    TEXT NOT NULL CHECK (discount_type IN ('percent','flat')),
+  discount_value   BIGINT NOT NULL,               -- percent 1-100 | paise
+  applies_to_plans TEXT[],                        -- NULL = all paid plans
+  max_redemptions  INT,
+  redeemed_count   INT NOT NULL DEFAULT 0,
+  is_lifetime      BOOLEAN NOT NULL DEFAULT FALSE, -- auto re-applies on renewals
+  valid_from       TIMESTAMPTZ,
+  valid_until      TIMESTAMPTZ,
+  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE billing_payments (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id                 UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  plan_code              TEXT NOT NULL,
+  cycle                  TEXT NOT NULL DEFAULT 'annual' CHECK (cycle IN ('annual','monthly')),
+  amount_paise           BIGINT NOT NULL,          -- post-discount, what Razorpay charges
+  currency               TEXT NOT NULL DEFAULT 'INR',
+  promo_code_id          UUID REFERENCES promo_codes(id) ON DELETE SET NULL,
+  original_amount_paise  BIGINT,
+  discount_paise         BIGINT,
+  razorpay_order_id      TEXT UNIQUE,              -- activation locks on this row
+  razorpay_payment_id    TEXT,
+  status                 TEXT NOT NULL DEFAULT 'created'
+    CHECK (status IN ('created','captured','failed')),
+  signature_verified     BOOLEAN NOT NULL DEFAULT FALSE,
+  raw_payload            JSONB,
+  created_by             UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  captured_at            TIMESTAMPTZ
+);
+CREATE INDEX idx_billing_payments_org_created ON billing_payments (org_id, created_at DESC);
+
+CREATE TABLE billing_webhook_events (        -- Razorpay event dedup
+  event_id     TEXT PRIMARY KEY,
+  event_type   TEXT NOT NULL,
+  payload      JSONB,
+  received_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ
+);
+
+CREATE TABLE promo_redemptions (             -- one use per (code, org)
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  promo_id           UUID NOT NULL REFERENCES promo_codes(id) ON DELETE CASCADE,
+  org_id             UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  billing_payment_id UUID REFERENCES billing_payments(id) ON DELETE SET NULL,
+  is_lifetime        BOOLEAN NOT NULL DEFAULT FALSE, -- copied from the code at redemption
+  redeemed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (promo_id, org_id)
+);
+CREATE INDEX idx_promo_redemptions_org_lifetime ON promo_redemptions (org_id) WHERE is_lifetime;
+
+CREATE TABLE ai_usage_records (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id        UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+  feature       TEXT NOT NULL,               -- v1: 'ai_summary'
+  resource_id   TEXT NOT NULL,               -- v1: tender Mongo id
+  period_month  DATE NOT NULL,               -- IST calendar month bucket
+  occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Consume = INSERT ON CONFLICT DO NOTHING; conflict = already unlocked = free re-view
+  UNIQUE (org_id, feature, resource_id, period_month)
+);
+CREATE INDEX idx_ai_usage_org_feature_month ON ai_usage_records (org_id, feature, period_month);
+
+CREATE TABLE org_entitlement_overrides (     -- manual comps, merged over the catalog
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  key         TEXT NOT NULL,                 -- 'seat_cap' | 'ai_quota' | 'feature:<name>'
+  value       TEXT NOT NULL,
+  note        TEXT,
+  expires_at  TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, key)
+);
+
+-- 0039 also seeds notification templates PAYMENT_RECEIPT / TRIAL_ENDING /
+-- RENEWAL_REMINDER / PAYMENT_FAILED (Email + InApp), backfills every existing org
+-- onto a 14-day Growth trial, and seeds the FOUNDING40 promo code (inactive).
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Migration 0040 — org capability profile (WHO WE ARE)
+--
+-- The operand every "can we bid this?" question was missing. The enrichment pipeline
+-- produces ONE artifact per tender, globally — the same text for every customer — so
+-- eligibility could never have been answered from it alone. `tenders.eligibility_score`
+-- is a column whose only writer (BidProcessor's BffTenderClient) sets it to NULL.
+-- ══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE org_capability_profile (
+  org_id                 UUID PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+  -- Three FYs because that is what Indian tenders ask for. fy1 = most recent completed FY.
+  -- The label is stored, not computed: "last completed FY" differs for an org onboarding in
+  -- March vs April, and inferring it wrong shifts every turnover comparison by a year.
+  turnover_fy1           NUMERIC(18,2),
+  turnover_fy2           NUMERIC(18,2),
+  turnover_fy3           NUMERIC(18,2),
+  turnover_fy1_label     TEXT,               -- "FY 2025-26"
+  net_worth              NUMERIC(18,2),
+  incorporation_date     DATE,               -- experience is DERIVED from this, never typed
+  -- These unlock RELAXATIONS (turnover/experience thresholds, EMD exemption), so their
+  -- absence forces the engine to assume the strictest reading of every tender.
+  udyam_number           TEXT,
+  udyam_category         TEXT,               -- micro | small | medium
+  dpiit_startup_number   TEXT,
+  nsic_number            TEXT,
+  -- Canonical vocabularies ONLY (36 states / 40 categories). Matching is exact, so a
+  -- free-text value matches nothing, forever, with no error.
+  serviceable_states     TEXT[],
+  categories_supplied    TEXT[],
+  emd_headroom           NUMERIC(18,2),      -- nothing else in the product knows this
+  bg_limit               NUMERIC(18,2),
+  bg_utilised            NUMERIC(18,2),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by             UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One table with a `kind` discriminator, not three: every rule asks the same two questions —
+-- do we hold it, and is it still valid on the bid date. One table means one expiry scan.
+CREATE TABLE org_credentials (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id        UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL,   -- certification | oem_authorization | registration | empanelment
+  code          TEXT NOT NULL,   -- upper-cased match key: "ISO 9001:2015", "DELL", "UDYAM"
+  label         TEXT,
+  number        TEXT,
+  issued_at     DATE,
+  valid_until   DATE,            -- NULL = perpetual, NOT expired
+  -- ON DELETE SET NULL: deleting the proof file must not delete the claim.
+  document_id   UUID REFERENCES documents(id) ON DELETE SET NULL,
+  verified_at   TIMESTAMPTZ,     -- NULL = self-asserted (every row today; findings say so)
+  notes         TEXT,
+  created_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX ux_org_credentials_org_kind_code ON org_credentials (org_id, kind, code);
+CREATE INDEX idx_org_credentials_org ON org_credentials (org_id);
+-- Drives the highest-value rule in the engine: "expires before this bid closes".
+CREATE INDEX idx_org_credentials_valid_until ON org_credentials (valid_until)
+  WHERE valid_until IS NOT NULL;
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- Migration 0041 — tender_fit_reports (the paid artifact)
+--
+-- Supersedes `ai_analysis_results`, which is keyed by tender alone (GLOBAL, so it cannot
+-- hold a per-org answer) and which nothing has ever written — every request to the analysis
+-- endpoint spent a credit and returned null.
+-- ══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE tender_fit_reports (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id              UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  tender_id           UUID NOT NULL REFERENCES tenders(id) ON DELETE CASCADE,
+  -- go | go_with_gaps | blocked | insufficient_data. Deliberately NOT a percentage:
+  -- insufficient_data is a first-class outcome so the engine can decline to answer.
+  verdict             TEXT NOT NULL,
+  verdict_reason      TEXT,
+  -- FitFinding[]. Each carries Source (tender_structured | tender_clause | org_profile |
+  -- award_data | model) and Confidence, both rendered — a model's inference must never be
+  -- able to look like a subtraction over two known numbers.
+  findings            JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cost_to_bid         NUMERIC(18,2),
+  cost_breakdown      JSONB,
+  -- Pinned, like TenderComplianceRules.Version: re-rendering under newer rules gives a
+  -- confidently wrong answer. A mismatch makes the report re-runnable, not silently restated.
+  rule_set_version    TEXT NOT NULL,
+  -- Staleness. A corrigendum can change eligibility outright, so a pre-corrigendum report may
+  -- be actively wrong — and it is the BUYER who made it so, hence a FREE re-run.
+  profile_updated_at  TIMESTAMPTZ,
+  tender_updated_at   TIMESTAMPTZ,
+  corrigendum_count   INT,
+  -- The one LLM-authored block. NULL until the async worker returns; the report is complete
+  -- and correct without it, which is what makes the feature safe to sell when a provider is down.
+  narrative           TEXT,
+  narrative_model     TEXT,
+  narrative_state     TEXT NOT NULL DEFAULT 'pending',  -- pending | ready | failed | skipped
+  narrative_error     TEXT,
+  generated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX ux_tender_fit_reports_org_tender ON tender_fit_reports (org_id, tender_id);
+CREATE INDEX idx_tender_fit_reports_org_generated ON tender_fit_reports (org_id, generated_at DESC);
+CREATE INDEX idx_tender_fit_reports_narrative_pending ON tender_fit_reports (narrative_state)
+  WHERE narrative_state = 'pending';

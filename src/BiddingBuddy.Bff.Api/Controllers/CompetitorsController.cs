@@ -1,3 +1,5 @@
+using BiddingBuddy.Bff.Api.Filters;
+using BiddingBuddy.Bff.Core.Billing;
 using BiddingBuddy.Bff.Core.DTOs.Common;
 using BiddingBuddy.Bff.Core.DTOs.Competitors;
 using BiddingBuddy.Bff.Core.Interfaces;
@@ -9,6 +11,7 @@ namespace BiddingBuddy.Bff.Api.Controllers;
 [ApiController]
 [Route("api/competitors")]
 [Authorize]
+[RequirePlanFeature(PlanFeatures.Competitors)]   // Growth+ — 403 UPGRADE_REQUIRED below that
 [Produces("application/json")]
 public class CompetitorsController(ICompetitorService competitorService) : BffControllerBase
 {

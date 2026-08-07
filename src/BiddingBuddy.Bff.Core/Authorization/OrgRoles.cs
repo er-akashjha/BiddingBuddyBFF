@@ -60,6 +60,7 @@ public static class OrgCapabilities
     public const string TenderPublish  = "tender.publish";   // publish, corrigendum, cancel, award
     public const string TenderRead     = "tender.read";      // see drafts + the audit file
     public const string CommitteeManage = "committee.manage"; // name the opening/evaluation committees
+    public const string BillingManage  = "billing.manage";   // checkout, verify payment, payment history
 
     /// <summary>
     /// Role → capabilities. <c>owner</c> and <c>admin</c> hold everything: a workspace whose owner
@@ -70,8 +71,8 @@ public static class OrgCapabilities
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Grants =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
-            [OrgRoles.Owner]       = Set(TenderAuthor, TenderPublish, TenderRead, CommitteeManage),
-            [OrgRoles.Admin]       = Set(TenderAuthor, TenderPublish, TenderRead, CommitteeManage),
+            [OrgRoles.Owner]       = Set(TenderAuthor, TenderPublish, TenderRead, CommitteeManage, BillingManage),
+            [OrgRoles.Admin]       = Set(TenderAuthor, TenderPublish, TenderRead, CommitteeManage, BillingManage),
 
             [OrgRoles.PoAdmin]     = Set(TenderAuthor, TenderRead, CommitteeManage),
             [OrgRoles.PoPublisher] = Set(TenderPublish, TenderRead),

@@ -19,7 +19,18 @@ public record CreateOrgDto(
     string? GemSellerId,
     string? GemSellerName,
     string? PrimaryCategory,
-    bool AllowDuplicateName = false
+    bool AllowDuplicateName = false,
+
+    /// <summary>
+    /// Which plan this workspace starts on. Omitted (the default) means the 14-day Growth
+    /// trial the marketing site promises. Pass <c>"free"</c> to decline it — someone who
+    /// picked Free on the pricing page should land on Free, not on a trial clock they have
+    /// to sit out before getting the plan they actually chose.
+    ///
+    /// <para>Only "free" is honored. Any other value falls back to the trial rather than
+    /// erroring, so this can never become a way to self-assign a paid plan.</para>
+    /// </summary>
+    string? StartPlan = null
 );
 
 public record UpdateOrgDto(

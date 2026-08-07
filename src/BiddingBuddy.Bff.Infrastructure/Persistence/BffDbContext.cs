@@ -97,6 +97,14 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
     public DbSet<AiAnalysisResult> AiAnalysisResults => Set<AiAnalysisResult>();
     public DbSet<OrgPerformanceSnapshot> OrgPerformanceSnapshots => Set<OrgPerformanceSnapshot>();
 
+    // Bid-fit: what the org can do (0040) + the per-org verdict on a tender (0041).
+    // The capability profile is the operand every "can we bid this?" question was missing —
+    // the pipeline's enrichment is global, so eligibility could never have been answered
+    // from it alone.
+    public DbSet<OrgCapabilityProfile> OrgCapabilityProfiles => Set<OrgCapabilityProfile>();
+    public DbSet<OrgCredential> OrgCredentials => Set<OrgCredential>();
+    public DbSet<TenderFitReport> TenderFitReports => Set<TenderFitReport>();
+
     // In-app notification inbox (was Notifications; renamed to free the name
     // for the dispatch-event table below)
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
@@ -113,6 +121,17 @@ public class BffDbContext(DbContextOptions<BffDbContext> options) : DbContext(op
 
     // Integrations
     public DbSet<GemIntegration> GemIntegrations => Set<GemIntegration>();
+
+    // SaaS subscription billing (migration 0039). Deliberately named billing_* /
+    // org_subscriptions — Orders/Invoices/EmdPayments above are the TENDER domain
+    // (money the org bills government buyers), not our subscription revenue.
+    public DbSet<OrgSubscription> OrgSubscriptions => Set<OrgSubscription>();
+    public DbSet<BillingPayment> BillingPayments => Set<BillingPayment>();
+    public DbSet<BillingWebhookEvent> BillingWebhookEvents => Set<BillingWebhookEvent>();
+    public DbSet<AiUsageRecord> AiUsageRecords => Set<AiUsageRecord>();
+    public DbSet<OrgEntitlementOverride> OrgEntitlementOverrides => Set<OrgEntitlementOverride>();
+    public DbSet<PromoCode> PromoCodes => Set<PromoCode>();
+    public DbSet<PromoRedemption> PromoRedemptions => Set<PromoRedemption>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

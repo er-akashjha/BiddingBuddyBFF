@@ -81,7 +81,12 @@ public record TenderDetailDto(
     // ── "bid" | "reverse-auction" — what the portal listed, for the UI's kind badge. Resolved via
     //    TenderKind so older tenders (stamped before source.bidKind existed) still report correctly.
     //    Distinct from Commercial.ReverseAuction, which is the AI-inferred "has an RA phase" flag. ──
-    string? BidKind = null
+    string? BidKind = null,
+    // ── True when the org has NOT unlocked this tender's AI this month: the AI fields above
+    //    (AiSummary, AiTags, AiAnalysis, EligibilityScore, RiskScore, WinProbability) are nulled
+    //    and the client renders an "Unlock AI analysis" action instead. AiScore stays as the
+    //    teaser on every plan. Appended + defaulted so older clients keep working. ──
+    bool AiLocked = false
 );
 
 /// <summary>
@@ -128,6 +133,23 @@ public record AiAnalysisResultDto(
     string[]? KeyClauses,
     DateTime GeneratedAt
 );
+
+/// <summary>The org's AI-summary meter for the current IST month. Null quota = unlimited (fair use).</summary>
+public record AiUsageDto(int Used, int? Quota);
+
+/// <summary>
+/// Response of the deliberate "view AI analysis" action.
+///
+/// <para><c>Analysis</c> is null when we have nothing to show for this tender. That case does
+/// NOT spend a credit — <c>Charged</c> reports whether the meter moved, so the client can say
+/// "no analysis available yet" without the customer having paid for the sentence. Re-viewing a
+/// tender already unlocked this month is also uncharged (shared usage key with the tender
+/// detail, so neither surface double-charges).</para>
+/// </summary>
+public record TenderAnalysisResponseDto(
+    AiAnalysisResultDto? Analysis,
+    AiUsageDto AiUsage,
+    bool Charged = false);
 
 public record SaveTenderDto(string? Notes, string[]? Tags, int? CustomScore);
 

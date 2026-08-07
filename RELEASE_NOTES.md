@@ -1,8 +1,211 @@
 # Release Notes — BiddingBuddyBFF
 
-Current version: **v44**
+Current version: **v48**
 
 ---
+
+## v48 — 2026-08-05 22:15 IST
+
+**Bid fit: the AI analysis tab now answers "can WE bid this?" instead of describing the tender.**
+Migrations `0040` + `0041`. Requires ui v42; BidProcessor v17 supplies the optional narrative.
+
+### The defect this closes
+
+`ai_analysis_results` has an entity, a configuration, a DTO, an upsert
+(`InternalPipelineService.UpsertAiAnalysisAsync`) and an endpoint (`POST /internal/analysis`).
+**Nothing has ever called it.** So `GetTenderAnalysisAsync` returned null for every tender that has
+ever existed, `AnalysisController` consumed a credit and returned `analysis: null`, and the SPA
+rendered hardcoded fallbacks over the hole — an expired ISO 27001, a ₹3.5Cr turnover, an OEM letter
+pending with Dell. Those are specific, confident, actionable claims about a company that is not the
+customer's, sold at one of three monthly credits on the Free plan.
+
+The root cause was structural, not a missing writer: the pipeline computes ONE enrichment per
+tender, globally, so nothing in it knows who is asking. `tenders.eligibility_score` and
+`win_probability` are columns whose only writer (BidProcessor `BffTenderClient.cs:103-104`) sets
+them to a literal null.
+
+### What replaces it
+
+- **`Core/Fit/TenderFitRules.cs`** — deterministic, versioned (`2026.08.1`), cited. Eligibility is
+  arithmetic: turnover vs threshold, certificate expiry vs bid deadline, EMD vs headroom, ePBG vs
+  BG line, reach, category, RA/splitting/preferences. No model decides a verdict, so the feature
+  still works when a provider is down and every finding can be pointed at the two values behind it.
+- **Verdict is `go | go_with_gaps | blocked | insufficient_data`** — never a percentage.
+  `insufficient_data` is a first-class outcome: against an empty profile, "no blockers found" means
+  "we didn't look", and rendering that as a green light is the failure this design exists to prevent.
+- **`FitFinding` requires `Source` and `Confidence`**, both rendered. A model's inference cannot be
+  made to look like a subtraction over two known numbers. Honesty is enforced by the type, not by
+  reviewer discipline.
+- **Statutory relaxations are applied BEFORE the raw threshold** (MSE Order 2012, DIPP startup, MSE
+  EMD exemption), each carrying its citation. Reporting a blocker an MSE is statutorily exempt from
+  would push a customer off a bid they are entitled to make.
+- **`Core/Fit/BidCostEstimator.cs`** — rupee cost to bid, every line read off the tender's own
+  fields. A line we cannot compute is OMITTED, never estimated. Blocked capital and money owed on
+  win are separated: conflating them overstates the cost of bidding by an order of magnitude.
+
+### Metering, corrected
+
+- `AnalysisController` no longer charges when there is nothing to return (`charged: false`), and
+  `TendersController` no longer charges an unlock on a tender with no AI behind the paywall.
+- A credit is taken only when a real verdict is newly produced. Free: re-reads, a tender already
+  unlocked this month (shared usage key with the tender detail), `insufficient_data`, and a re-run
+  forced by a corrigendum — **the customer must not pay because the buyer amended the notice**.
+- `IAiQuotaService.RefundAsync` — the meter is taken before the report is written, so a failed
+  persist hands the credit back rather than billing the customer for our outage.
+- `GET /api/analysis/ai-usage` — read the meter without spending it, so the price of a click is
+  visible before the click.
+
+### New surface
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/analysis/tenders/{id}/fit` | The verdict. `?rerun=true` recomputes. |
+| `GET /api/analysis/tenders/{id}/fit/existing` | Stored verdict only — never computes, never meters. |
+| `GET /api/analysis/tenders/{id}/fit/export` | .docx bid/no-bid note (OpenXML, already a dependency). |
+| `POST /api/analysis/tenders/{id}/fit/push-to-bid/{bidId}` | Blockers + gaps into `bid_checklists`, idempotent on title. |
+| `GET/PUT /api/capability/profile` | The org capability profile. PUT not PATCH — a turnover you can't erase becomes a stale one the engine treats as fact. |
+| `GET/POST/DELETE /api/capability/credentials` | Certificates, OEM letters, registrations. Upserts on (kind, code). |
+| `GET /api/capability/credential-suggestions` | Inferred from the document vault. Read-only — nothing is recorded until the user accepts. |
+| `POST /internal/tender-fit` | BidProcessor's narrative callback. Writes ONLY the narrative columns. |
+
+### Notes
+
+- **`0039` is still unapplied.** These sit on top of it — apply `0039`, `0040`, `0041` in order, or
+  `PlanService` resolves every org to the free tier and the quotas are wrong.
+- `ai_analysis_results` and `POST /internal/analysis` are left dormant for one release, then dropped.
+- Publishes to `tender.fit-narrative`; that queue exists only because BidProcessor v17 subscribes.
+  An unroutable message on the default exchange is silently DISCARDED, so the worker must ship
+  first or alongside. A publish failure is logged and swallowed — the report stands without prose.
+- 504 tests green (19 new: fit engine + credential matcher).
+
+---
+
+## v47 — 2026-08-04 08:45 IST
+
+**Two bugs found by exercising a running BFF, both of which passed every unit test.**
+
+**1. Password sign-up got no trial at all.** A workspace is born in two places: the onboarding
+form (`OrganizationService.CreateAsync`, which OAuth sign-ups reach) and
+`AuthService.CreateVerifiedAccountAsync`, which creates the org inline the moment a password
+sign-up confirms its e-mail OTP. Seeding lived only in the first, so **every password sign-up
+landed on Free with no trial** — the "14-day trial · no credit card" promise, made in three
+places on the marketing site, silently unkept for anyone not using a social provider. A fresh
+sign-up against the live BFF returned `planCode: "free", trialEndsAt: null`, which is how this
+surfaced. Seeding is now `ISubscriptionSeeder`, called by both paths.
+
+**2. A wasted AI credit on a 404.** `/api/analysis/tenders/{id}` consumed the credit *before*
+fetching, so a tender that does not exist (or any upstream failure) billed a credit and then
+returned 404. On Free that is one of three for the month, spent on nothing. The fetch now
+happens first and the credit is taken last — and an already-unlocked tender is checked before
+either, so a re-read stays free even once the quota is exhausted.
+
+Verified live against localhost:5124 with migration `0039` applied: `/api/public/plans` serves
+the corrected catalog; `/api/billing/summary` reports seats and AI usage; checkout 503s while
+Razorpay is unconfigured; the webhook 503s with no signature AND with a bogus one; competitors
+403s `UPGRADE_REQUIRED`; a second invite on a 1-seat plan 403s `SEAT_LIMIT_REACHED`; three
+distinct unlocks consume three credits, a repeat consumes none, and the fourth 403s. Promo
+`LAUNCH25` priced per plan: Starter ₹2,999→₹2,249, Growth ₹11,999→₹8,999, Pro ₹29,999→₹22,499.
+
+3 new tests (462 total, green).
+
+---
+
+## v46 — 2026-08-03 10:34 IST
+
+**Let people choose the Free plan, and stop the pricing page advertising things the
+product does not do.** Follows v45; no schema change.
+
+`CreateOrgDto` gains an optional `StartPlan`. Omitted (every existing caller) still means
+the 14-day Growth trial. `"free"` creates a Free workspace outright — someone who picked
+Free on the pricing page was previously given a trial anyway and had to sit out 14 days to
+reach the plan they actually asked for.
+
+The rule now lives in `Core/Billing/SubscriptionSeedPolicy.cs` as a pure function, because
+the seeding itself is raw SQL that the in-memory test provider cannot execute — so the
+invariant that matters would otherwise have shipped untested. **Only `"free"` is honoured;
+every other value falls back to the trial rather than erroring**, which is what stops a
+client self-assigning Pro by posting `startPlan: "pro"`. 13 new tests cover it, including
+the paid-code and injection-shaped cases (459 total, green).
+
+The free path writes a real `org_subscriptions` row rather than leaving the org row-less.
+Both resolve to identical entitlements today, but only a row distinguishes "chose Free"
+from "trial seeding failed" — the difference between leaving someone alone and owing them
+a trial.
+
+**Plan bullets rewritten against what is actually enforced.** The catalog was advertising
+workflow automation (its page redirects to the dashboard), Excel export (does not exist),
+and listing the bid tracker and document vault as paid upgrades when both are available on
+every plan including Free. Only six things are genuinely gated — AI quota, alert cadence,
+saved-filter cap, seats, competitor/result history, and the eligibility check — so the
+bullets now describe those, cumulatively ("Everything in Starter, plus:"), with shared
+capabilities listed under Free where they truly begin.
+
+**Subscription billing — plans, Razorpay checkout, promo codes, AI quotas, seat limits.** Migration
+`0039`. The BFF had no plan/tier concept at all; this is the greenfield commercial layer.
+
+- **Schema** (`0039_add_billing.sql`, idempotent) — `org_subscriptions` (one row per org, unique),
+  `billing_payments` (**unique `razorpay_order_id`** — the lock activation serializes on),
+  `billing_webhook_events` (event dedup), `promo_codes` + `promo_redemptions` (**unique
+  `(promo_id, org_id)`** = one use per org), `ai_usage_records` (**unique
+  `(org_id, feature, resource_id, period_month)`** — the constraint *is* the consume operation),
+  `org_entitlement_overrides`. Seeds `PAYMENT_RECEIPT` / `TRIAL_ENDING` / `RENEWAL_REMINDER` /
+  `PAYMENT_FAILED` templates (Email + InApp) and the inactive `FOUNDING40` code. **Backfills every
+  existing org onto a 14-day Growth trial** — dropping them to Free on deploy day would be a silent
+  feature regression. Named `billing_*` throughout to avoid the tender-domain `orders`/`invoices`/
+  `emd_payments` (money the org bills government buyers).
+- **Catalog is code** — `Core/Billing/PlanCatalog.cs` (Free / Starter ₹2,999 / Growth ₹11,999 /
+  Pro ₹29,999 annual, paise), modelled on `OrgRoles.cs`: gates compile against `PlanFeatures.*`
+  constants, and `GET /api/public/plans` serialises the same catalog, so advertised prices and
+  enforced limits cannot drift.
+- **Resolution is DATE-driven** — `Core/Billing/PlanResolution.cs` recomputes the effective plan from
+  `trial_ends_at` / `current_period_end` (+7-day grace) on every read. **A stalled lifecycle worker can
+  never extend paid access**; `status` is only a label. Shared by `PlanService` (gates) and
+  `AuthService` (`/me`) so the two can't disagree.
+- **Gates** — new `RequirePlanFeatureAttribute` (clone of `RequireOrgCapabilityAttribute`) →
+  `403 { code: "UPGRADE_REQUIRED", feature, requiredPlan, currentPlan }`, distinguishable from the
+  membership and role 403s. Applied to `CompetitorsController` and `GET /api/tenders/{id}/result`.
+  New `PlanLimitException` carries the same body shape from inside services (`GlobalExceptionHandler`
+  serialises it) for saved-filter caps and seat limits (`SEAT_LIMIT_REACHED` — pending invites reserve
+  a seat, re-checked at accept). Alert cadence is floored **at read time** in `MatchingService`, so a
+  downgrade never rewrites the org's stored preference. New `billing.manage` capability (owner+admin).
+- **AI metering** — `AiQuotaService`, IST calendar month. Quota is consumed only by the deliberate
+  unlock (`GET /api/analysis/tenders/{id}`, or `GET /api/tenders/{id}?unlockAi=true`), never by
+  browsing; **re-viewing an unlocked tender is free** (same usage key across both endpoints, so neither
+  double-charges). Tender detail masks `AiSummary`/`AiAnalysis`/risk/eligibility with `aiLocked: true`
+  until unlocked — `AiScore` stays as the teaser on every plan. Unlimited plans auto-unlock on view but
+  still record usage for fair-use monitoring.
+- **Razorpay** — typed `HttpClient` (no SDK), one-time annual orders, **no autopay mandates** (v2).
+  `RazorpaySignature` verifies both the checkout callback (`order|payment`) and the webhook (raw body)
+  with `FixedTimeEquals`. `ActivateFromPaymentAsync` is the single idempotent activator shared by the
+  browser callback and the webhook: `SELECT … FOR UPDATE` on the payment row, already-captured = no-op,
+  so the race between them is a non-event. Verify also asserts the order belongs to the calling org —
+  a valid signature proves the payment is real, not who may claim it.
+- **Promo codes** — `PromoService`; **all discount math server-side**, the client only displays figures
+  it produced. Percent or flat, plan restrictions, validity window, redemption cap, one use per org
+  (`INVALID_CODE` / `EXPIRED` / `EXHAUSTED` / `NOT_APPLICABLE` / `ALREADY_USED`). `is_lifetime`
+  re-applies automatically on every later checkout — that's the "founding member 40% off for life"
+  mechanism, with no autopay needed. A too-large flat discount clamps to a ₹1 floor (Razorpay rejects
+  ₹0 orders). Admin CRUD at `/internal/promo-codes` (X-Api-Key); discount type/value are immutable
+  after creation so a lifetime holder's price can't be rewritten under them.
+- **Endpoints** — `BillingController` (`GET summary` any member; `POST promo/validate`, `POST checkout`,
+  `POST verify`, `GET payments` behind `billing.manage`), `PublicPlansController`,
+  `RazorpayWebhookController` (`/api/webhooks/razorpay`, added to the `OrgContextMiddleware` skip list;
+  **fails closed with 503 when `WebhookSecret` is unset** — deliberately *not* `[PipelineApiKey]`, which
+  allows requests when unconfigured), `InternalPromoCodesController`.
+- **Trial + lifecycle** — `OrganizationService.CreateAsync` starts the 14-day Growth trial (caught and
+  logged, never fatal — no row resolves to Free). New `SubscriptionLifecycleWorker` +
+  `SubscriptionLifecycleService`: trial-ending T-3, renewal T-14/T-3, `past_due` at period end,
+  `expired` after grace. Every email deduped by its own stamp column, reset on renewal.
+- **`/me`** — `UserOrgDto` gains `PlanCode` / `PlanStatus` / `TrialEndsAt` / `PlanPeriodEnd`, appended
+  and defaulted exactly as `OrgType` was, so older clients keep working.
+- **Config** — new `Razorpay` (`KeyId` public; `KeySecret` + `WebhookSecret` via user-secrets/env) and
+  `SubscriptionLifecycle` sections. **Unconfigured Razorpay degrades gracefully**: checkout returns 503
+  `CHECKOUT_UNAVAILABLE` and the UI shows "Contact us" — the account is a go-live prerequisite like
+  DNS/OAuth, not a build dependency.
+- **Tests** — 32 new (446 total, all green): plan resolution incl. the expired-trial-still-labelled-
+  trialing case and fail-closed unknown statuses, catalog prices pinned against the published page,
+  promo validation/discount math/lifetime auto-apply/loud failure on a stale code, and signature
+  verification incl. tampered bodies, wrong secrets, empty secrets and malformed hex.
 
 ## v44 — 2026-08-01 19:49 IST
 
